@@ -79,10 +79,29 @@ tokens while answers average ~55. Current code plans for 64 (`--expected-new-tok
 keeps every answer length within 1 point in simulation. TieredKV used slightly *less* memory than
 Lexico on every problem, so its result is not bought with extra bytes.
 
+## Hit rate: does prompt attention predict answer-time attention?
+
+`results/final/hit_rate.json`: full cache, 20 problems, 28 layers, ~80 generated tokens each.
+Prompt tokens are ranked once from prefill attention (as TieredKV does), then compared with the
+attention they actually receive while the answer is generated.
+
+| Measure | Value | Random |
+|---|---|---|
+| Predicted top-5% that are actually top-5% during the answer (precision) | **56%** | 5% |
+| Answer-time attention landing on the predicted top 5% | **86%** | 5% |
+| ...on the predicted top 25% (heavy + mid tiers) | **92%** | 25% |
+| Answer-time attention on prompt tokens H₂O evicts first, at 10 / 15 / 20 / 25% | 17 / 15 / **14** / 12% | |
+
+Coverage is high in every layer (72–83% for the top 5%), and precision ranges 44–68% across
+problems. **Implication:** TieredKV puts its extra atoms where the attention goes, so *picking*
+tokens is not the bottleneck. Yet it only ties Lexico, which points to reconstruction quality
+(our 45-minute dictionary) and the starved light tier (finding 3) as the limits. For H₂O, losing
+only ~14% of attention costs 57 accuracy points: the low-attention tokens still carry facts.
+This matches ReFreeKV (arXiv 2502.16886), which reports H₂O keeping ~3% of full-cache GSM8K
+performance at a 20% budget.
+
 ## Pending (queued on the GPU)
 
-- `tieredkv.hit_rate`: of the prompt tokens ranked top-5% / top-25% by prefill attention, how many
-  get the attention during generation, and how much decode-time attention H₂O evicts.
 - `tiered_kv` (novelty): tier only the keys, keep values at Lexico's uniform atoms. Motivated by the
   dictionary check: key error rises with attention (Spearman +0.53, positive in 140/140 cases),
   value error does not (+0.03). Expected to also protect the formatting tokens' values.
