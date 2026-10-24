@@ -26,5 +26,12 @@
     "eligible": true,
     "difference_pp": 0.03999999999999915,
     "reason": ""
+  },
+  {
+    "csv_line": 6,
+    "method": "tiered_kv",
+    "eligible": true,
+    "difference_pp": 0.120000000000001,
+    "reason": ""
   }
 ]

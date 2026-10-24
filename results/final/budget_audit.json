@@ -1,0 +1,37 @@
+[
+  {
+    "csv_line": 2,
+    "method": "lexico",
+    "eligible": true,
+    "difference_pp": 0.5499999999999977,
+    "reason": ""
+  },
+  {
+    "csv_line": 3,
+    "method": "tiered",
+    "eligible": true,
+    "difference_pp": 0.49999999999999767,
+    "reason": ""
+  },
+  {
+    "csv_line": 4,
+    "method": "full",
+    "eligible": true,
+    "difference_pp": 0.0,
+    "reason": ""
+  },
+  {
+    "csv_line": 5,
+    "method": "h2o",
+    "eligible": true,
+    "difference_pp": 0.03999999999999837,
+    "reason": ""
+  },
+  {
+    "csv_line": 6,
+    "method": "tiered_kv",
+    "eligible": true,
+    "difference_pp": 0.12000000000000066,
+    "reason": ""
+  }
+]
