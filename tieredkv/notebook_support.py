@@ -64,6 +64,6 @@ def run_logged(command,log_path,*,result_dir=None,cwd=None):
                 detail=state.get("error","Inspect per-problem budget audits." if status=="budget_audit_failed" else "")
             except (OSError,ValueError):
                 pass
-        raise RuntimeError(f"Phase 4 stopped: {status} (exit {code}). {detail}\n"
+        raise RuntimeError(f"Experiment stopped: {status} (exit {code}). {detail}\n"
                            f"Full log: {log_path}\nLast output:\n"+"\n".join(tail))
     return code

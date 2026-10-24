@@ -60,6 +60,14 @@ For the Lexico baseline, `solve_s(budget, N, W)` gives the uniform `s`. Tiered r
 
 ## Integrated validation and threshold runs
 
+For Sampreeth's four H2O budgets plus full baseline, open
+[notebooks/h2o_matrix_colab.ipynb](notebooks/h2o_matrix_colab.ipynb).
+It needs a GPU and pinned model, **no dictionary**. It also saves a twenty-prompt
+target-model attention probe. See [docs/h2o_colab.md](docs/h2o_colab.md).
+Your remaining deliverables and deck order are tracked in
+[docs/sampreeth_completion.md](docs/sampreeth_completion.md), with slide text and
+speaker notes in [docs/sampreeth_slides.md](docs/sampreeth_slides.md).
+
 For the current Phase-4 GPU runner, use
 [notebooks/phase4_thresholds_colab.ipynb](notebooks/phase4_thresholds_colab.ipynb).
 See [docs/phase4_colab.md](docs/phase4_colab.md) for its strict byte policy,

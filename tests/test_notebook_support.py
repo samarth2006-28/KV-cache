@@ -13,12 +13,14 @@ from tieredkv.notebook_support import dictionary_metadata,run_logged
 REPO=Path(__file__).resolve().parents[1]
 
 
-def notebook_cell(cell_id):
-    notebook=json.loads((REPO/"notebooks/phase4_thresholds_colab.ipynb").read_text(encoding="utf-8"))
+def notebook_cell(cell_id,filename="phase4_thresholds_colab.ipynb"):
+    notebook=json.loads((REPO/"notebooks"/filename).read_text(encoding="utf-8"))
     return "".join(next(c for c in notebook["cells"] if c["id"]==cell_id)["source"])
 
 
-def test_setup_makes_project_importable_in_kernel_style_sys_path(tmp_path,monkeypatch):
+@pytest.mark.parametrize("filename,cell_id",[("phase4_thresholds_colab.ipynb","phase4-01"),
+                                            ("h2o_matrix_colab.ipynb","h2o-01")])
+def test_setup_makes_project_importable_in_kernel_style_sys_path(tmp_path,monkeypatch,filename,cell_id):
     project=tmp_path/"checkout";project.mkdir()
     probe=project/"_phase4_notebook_probe.py";probe.write_text("READY=True\n")
     monkeypatch.chdir(tmp_path)
@@ -32,7 +34,7 @@ def test_setup_makes_project_importable_in_kernel_style_sys_path(tmp_path,monkey
     monkeypatch.setattr(subprocess,"check_output",output)
     monkeypatch.setattr(subprocess,"run",lambda *a,**kw:types.SimpleNamespace(returncode=0))
     assert importlib.util.find_spec("_phase4_notebook_probe") is None
-    exec(compile(notebook_cell("phase4-01"),"setup-cell","exec"),{})
+    exec(compile(notebook_cell(cell_id,filename),"setup-cell","exec"),{})
     spec=importlib.util.find_spec("_phase4_notebook_probe")
     assert Path(spec.origin)==probe
 
@@ -70,3 +72,19 @@ def test_notebook_launch_uses_logged_unbuffered_child():
     assert '"-u"' in source and "run_logged(command,LOG" in source
     assert "subprocess.run(command)" not in source
     assert "notebook_support import dictionary_metadata" in notebook_cell("phase4-05")
+
+
+def test_h2o_notebook_is_dictionary_free_and_references_existing_tests():
+    import ast
+    nb=json.loads((REPO/"notebooks/h2o_matrix_colab.ipynb").read_text(encoding="utf-8"))
+    for cell in nb["cells"]:
+        if cell["cell_type"]!="code":continue
+        source="".join(cell["source"])
+        tree=ast.parse(source)
+        assert cell["outputs"]==[] and cell["execution_count"] is None
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Constant) and isinstance(node.value,str) and node.value.startswith("tests/"):
+                assert (REPO/node.value).is_file()
+    launch=notebook_cell("h2o-09","h2o_matrix_colab.ipynb")
+    assert "tieredkv.h2o_experiment" in launch and "run_logged(command,LOG" in launch
+    assert "dictionary" not in launch and '"-u"' in launch

@@ -10,7 +10,7 @@ metadata. Supply the team's existing .pt and adjacent training .json on Drive.
 
 ## What is improved
 
-Validation: **256 tests passed, 1 target-model test skipped** on Torch 2.5.1+cpu
+Validation: **274 tests passed, 1 target-model test skipped** on Torch 2.5.1+cpu
 and Transformers 4.49.0. All eight notebook code cells parse successfully, with
 no prefilled benchmark outputs. Controller tests mock GPU work while exercising
 real checkpointing, independent analysis, plotting, portable paths and archives.
