@@ -1,5 +1,7 @@
 # Phase 4: heavy-hitter threshold ablation
 
+Historical Phase 4 diagnostic; current integration status is in integration_review.md.
+
 Status: configs and real-score allocation diagnostics complete. **The task-accuracy
 ablation is blocked, not completed.** Sampreeth owns the 3/5/10% threshold experiment
 at a nominal 20% KV budget (team plan, allocator step 7).
@@ -64,13 +66,15 @@ all 1,800 histogram byte totals, and verified the executed source hashes.
 
 ## Remaining end-to-end gate
 
-At main 9350a8f, all THREE configs were passed to eval.make_cache. Each raises
+At the time of the diagnostic, on main 9350a8f, all THREE configs were passed to eval.make_cache. Each raises
 NotImplementedError because shared TieredKVCache supports full only.
-Shared eval.run also does not yet construct/attach a mean-mode ScoreTracker.
-Config score_mode is a handoff requirement, not a switch consumed by that runner.
+That historical blocker is resolved on b-allocator-integration-review: c-eval was
+merged, shared eval.run attaches the correct tracker, and --config loads the JSON
+descriptors. The descriptors now use chunk=8 to match the integrated cache.
+Target-model accuracy and budget gates remain pending.
 
 Before running task accuracy on shared compute:
-1. Wire compressed generation and mean ScoreTracker in the shared cache/runner.
+1. Validate compressed generation and mean ScoreTracker on the agreed model (the code is now wired).
    Preserve original positions/masks and score/KV alignment.
 2. Use the same capable model, matching dictionary, fixed subset n/seed, five-shot
    examples, generation settings and memory denominator for all three thresholds.
@@ -80,25 +84,14 @@ Before running task accuracy on shared compute:
 5. Compare paired answer accuracy only after those gates pass. Do not choose a
    threshold using these allocation projections.
 
-The JSON files are run descriptors; eval.py's CLI does not currently load them.
-For the integration owner, the existing Python entry point is:
-
-```python
-import json
-from tieredkv.eval import run
-
-descriptor = json.load(open("configs/tiered_hh3_b20.json"))
-# Only after the compressed cache, tracker and equivalence gates above pass:
-result = run(descriptor["method"], descriptor["budget"], descriptor["task"],
-             n=AGREED_N, seed=descriptor["seed"],
-             model_name=AGREED_MODEL,
-             cfg={**descriptor["cfg"], "dictionary":MATCHING_DICTIONARY},
-             results=SEPARATE_ABLATION_CSV)
+The shared runner now accepts the descriptors directly:
+```bash
+python -m tieredkv.eval --config configs/tiered_hh3_b20.json --model AGREED_MODEL --dictionary MATCHING_DICTIONARY --n AGREED_N --results results/threshold_review.csv
 ```
-
-Use each descriptor unchanged except for shared model/dictionary/n/output choices.
-The integration must honor descriptor["score_mode"] by constructing the tracker;
-passing it as a stray cfg field does not do that in the current runner.
+Repeat for tiered_b20.json and tiered_hh10_b20.json with identical model,
+dictionary and subset settings. Failed budgets produce eligible=False, retain
+their prediction/manifest files, and return CLI exit code 1. Use a fresh results
+CSV for the new run_id/eligible schema.
 
 ## Reproduce the completed diagnostic
 

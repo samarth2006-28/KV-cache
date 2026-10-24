@@ -24,23 +24,29 @@ Suffixes combine, e.g. tiered_hh3_evict.
 """
 import argparse
 import csv
+import hashlib
 import json
 import os
 import subprocess
 import time
+import uuid
+import math
+from pathlib import Path
 
 import torch
 
 from . import gsm8k, profile
 from .allocator import ScoreTracker
 from .cache import CHUNK, METHODS, WINDOW, TieredKVCache
+from .budget_audit import audit_rows
 
 __all__ = ["run", "load_model", "parse_method", "COLUMNS"]
 
 DEFAULT_MODEL = os.environ.get("TIEREDKV_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 RESULTS = os.environ.get("TIEREDKV_RESULTS", "results/results.csv")
 COLUMNS = ["method", "budget_target", "budget_measured", "acc", "acc_flex", "kv_mb", "peak_gb",
-           "tok_s", "ms_tok", "s_prob", "n", "seed", "task", "model", "git_sha"]
+           "tok_s", "ms_tok", "s_prob", "n", "seed", "task", "model", "git_sha",
+           "run_id", "eligible"]
 MAX_NEW_TOKENS = 256
 N_SHOT = 5
 TRACKER_MODE = {"h2o": "sum", "tiered": "mean"}
@@ -97,10 +103,20 @@ def _git_sha():
         return "nogit"
 
 
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path,"rb") as f:
+        for block in iter(lambda:f.read(1024*1024),b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 @torch.no_grad()
 def generate(model, tok, prompt, cache, max_new_tokens=MAX_NEW_TOKENS):
     """Greedy-decode one prompt through `cache`. Returns (completion text, DecodeTimer, seconds)."""
     ids = tok(prompt, return_tensors="pt").to(model.device)
+    if ids["input_ids"].shape[-1]+max_new_tokens-1 > model.config.max_position_embeddings:
+        raise ValueError("prompt plus generation exceeds model context; shorten settings explicitly")
     timer = profile.DecodeTimer()
     profile.sync()
     t0 = time.perf_counter()
@@ -137,21 +153,32 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
         raise NotImplementedError(f"task {task!r}: LongBench loader comes after GSM8K")
     cfg = dict(cfg or {})
     base, _ = parse_method(method)   # fail on a bad name before loading the model
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise ValueError("n must be a positive integer")
+    if isinstance(budget, bool) or not math.isfinite(budget) or not 0 < budget <= 1:
+        raise ValueError("budget must be a fraction in (0,1]")
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
+        raise ValueError("max_new_tokens must be a positive integer")
+    if cfg.get("score_mode", TRACKER_MODE.get(base)) != TRACKER_MODE.get(base):
+        raise ValueError(f"{base} requires score_mode={TRACKER_MODE.get(base)!r}")
     if base in ("lexico", "tiered") and not cfg.get("dictionary"):
         raise ValueError(f"{method} needs a dictionary: cfg['dictionary'] / --dictionary PATH")
     model, tok = load_model(model_name)
     probs = gsm8k.load_subset(n, seed=seed)
+    if len(probs) != n:
+        raise ValueError("loader returned a different subset size than requested")
     shots = gsm8k.fewshot(N_SHOT)
 
     profile.reset_peak()
-    tag = f"{task}_{method}_b{budget:g}_n{n}_s{seed}"
+    run_id = uuid.uuid4().hex
+    tag = f"{task}_{method}_b{budget:g}_n{n}_s{seed}_{run_id}"
     os.makedirs(os.path.join(os.path.dirname(results) or ".", "runs"), exist_ok=True)
     preds_path = os.path.join(os.path.dirname(results) or ".", "runs", f"{tag}.jsonl")
 
     tracker = ScoreTracker(model, mode=TRACKER_MODE[base]) if base in TRACKER_MODE else None
     strict = flex = 0
     secs = dec_tokens = dec_secs = 0.0
-    kv_bytes, budgets, avg_s = [], [], []
+    kv_bytes, budgets, avg_s, problem_audits = [], [], [], []
     try:
         with open(preds_path, "w") as f:
             for i, p in enumerate(probs):
@@ -166,11 +193,16 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
                 dec_secs += timer.decode_seconds
                 kv_bytes.append(cache.kv_bytes())
                 budgets.append(cache.measured_budget())
+                problem_audits.append(audit_rows([{"method":method,"budget_target":budget,
+                                                  "budget_measured":budgets[-1]}])[0])
+                problem_audits[-1]["problem_idx"] = p["idx"]
                 if cache.avg_s is not None:
                     avg_s.append(cache.avg_s)
                 f.write(json.dumps({"idx": p["idx"], "strict": r["strict"], "flexible": r["flexible"],
                                     "pred": r["pred"], "target": p["target"], "text": text,
-                                    "budget_measured": budgets[-1], "avg_s": cache.avg_s}) + "\n")
+                                    "budget_measured": budgets[-1], "avg_s": cache.avg_s,
+                                    "prompt_sha256":hashlib.sha256(gsm8k.build_prompt(p["question"],shots).encode()).hexdigest(),
+                                    "budget_eligible":problem_audits[-1]["eligible"]}) + "\n")
                 print(f"[{tag}] {i + 1}/{n} strict={strict / (i + 1):.3f} "
                       f"budget={budgets[-1]:.3f} {dt:.1f}s", flush=True)
     finally:
@@ -185,33 +217,77 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
            "tok_s": round(dec_tokens / dec_secs, 2) if dec_secs else 0.0,
            "ms_tok": round(1000 * dec_secs / dec_tokens, 2) if dec_tokens else 0.0,
            "s_prob": round(secs / n, 2), "n": n, "seed": seed, "task": task, "model": model_name,
-           "git_sha": _git_sha()}
+           "git_sha": _git_sha(), "run_id":run_id}
+    aggregate_audit = audit_rows([row])[0]
+    row["eligible"] = aggregate_audit["eligible"] and all(p["eligible"] for p in problem_audits)
+    manifest = {"run_id":run_id,"method":method,"cfg":cfg,"model":model_name,
+                "model_revision":getattr(model.config,"_commit_hash",None),
+                "dtype":str(next(model.parameters()).dtype),"seed":seed,"n":n,
+                "max_new_tokens":max_new_tokens,"score_mode":TRACKER_MODE.get(base),
+                "test_indices":[p["idx"] for p in probs],
+                "shot_indices":[p["idx"] for p in shots],
+                "budget_target":budget,"aggregate_audit":aggregate_audit,
+                "problem_audits":problem_audits,"eligible":row["eligible"],
+                "git_sha":row["git_sha"],"torch":torch.__version__,
+                "dictionary_note":"Dictionary must match this model; path is in cfg.",
+                "memory_denominator":"full fp16 KV, not the model dtype",
+                "dataset_revision":gsm8k.DATASET_REVISION,
+                "effective_cache":{"window":cache.window,"chunk":cache.chunk,
+                                   "tiers":cache.tiers,"ratios":cache.ratios,
+                                   "evict_light":cache.evict_light},
+                "source_sha256":{name:_file_sha256(Path(__file__).parent/name) for name in
+                    ("eval.py","cache.py","allocator.py","compress.py","gsm8k.py","profile.py")},
+                "dictionary_sha256":_file_sha256(cfg["dictionary"]) if cfg.get("dictionary") else None,
+                "limitations":"Budget audit is not a statistical accuracy or speedup test."}
+    manifest_path = os.path.splitext(preds_path)[0]+".manifest.json"
+    with open(manifest_path,"w",encoding="utf-8") as f:
+        json.dump(manifest,f,indent=2,allow_nan=False)
+    if not row["eligible"]:
+        print("BUDGET AUDIT FAILED: retained for inspection, excluded from matched-budget comparisons.",flush=True)
     append_row(row, results)
     s_note = f" avg_s={sum(avg_s) / len(avg_s):.1f}" if avg_s else ""
     print(f"[{tag}] acc={row['acc']:.3f} budget={row['budget_measured']:.3f}{s_note} "
           f"{row['s_prob']} s/problem (n for ~20 runs = GPU-seconds / (20 * {row['s_prob']}))",
           flush=True)
     return {"acc": row["acc"], "mem_gb": row["kv_mb"] / 1024, "tok_s": row["tok_s"],
-            "ms_tok": row["ms_tok"], "s_prob": row["s_prob"], "cfg": {**cfg, **row, "preds": preds_path}}
+            "ms_tok": row["ms_tok"], "s_prob": row["s_prob"],
+            "cfg": {**cfg, **row, "preds": preds_path, "manifest":manifest_path}}
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--method", default="full")
-    ap.add_argument("--budget", type=float, default=1.0)
-    ap.add_argument("--task", default="gsm8k")
-    ap.add_argument("--n", type=int, default=50)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--config", help="JSON run descriptor (CLI arguments override it)")
+    ap.add_argument("--method")
+    ap.add_argument("--budget", type=float)
+    ap.add_argument("--task")
+    ap.add_argument("--n", type=int)
+    ap.add_argument("--seed", type=int)
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--dictionary", default=None, help="dictionary .pt (lexico / tiered)")
+    ap.add_argument("--window", type=int)
+    ap.add_argument("--chunk", type=int)
     ap.add_argument("--results", default=RESULTS)
     ap.add_argument("--max-new-tokens", type=int, default=MAX_NEW_TOKENS)
     a = ap.parse_args()
-    cfg = {"dictionary": a.dictionary} if a.dictionary else {}
-    out = run(a.method, a.budget, a.task, a.n, a.seed, model_name=a.model, cfg=cfg,
+    descriptor = {}
+    if a.config:
+        with open(a.config,encoding="utf-8") as f:
+            descriptor = json.load(f)
+    cfg = dict(descriptor.get("cfg",{}))
+    if "score_mode" in descriptor:
+        cfg["score_mode"] = descriptor["score_mode"]
+    for key in ("dictionary","window","chunk"):
+        if getattr(a,key) is not None:
+            cfg[key] = getattr(a,key)
+    def setting(key, default):
+        value = getattr(a,key)
+        return descriptor.get(key,default) if value is None else value
+    out = run(setting("method","full"), setting("budget",1.0), setting("task","gsm8k"),
+              setting("n",50), setting("seed",0), model_name=a.model, cfg=cfg,
               results=a.results, max_new_tokens=a.max_new_tokens)
     print(json.dumps({k: v for k, v in out.items() if k != "cfg"}))
+    return 0 if out["cfg"]["eligible"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

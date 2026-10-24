@@ -18,7 +18,7 @@ Draft content for the deck. Numbers marked **[TBD]** are filled from `results/sa
 | Values | 0.81 | 0.73 | 0.59 | 0.39 | 0.16 |
 
 - Values are harder to compress than keys at every s.
-- Our dictionary trained for 45 min on a laptop GPU. Lexico trains for much longer, so our absolute errors are higher than theirs. That applies equally to every method we compare.
+- Our dictionary trained for 45 min. This is our reconstruction probe, not a reproduced comparison against published Lexico results.
 
 Visual: one vector → a stacked bar of 8 coloured atoms.
 
@@ -27,7 +27,7 @@ Visual: one vector → a stacked bar of 8 coloured atoms.
 ## Slide 2: What we change: atoms follow attention
 
 - **Lexico:** every token gets the same s.
-- **H₂O:** under 5% of tokens receive most of the attention. We measured this on Llama-3.2: **the top 5% of tokens hold about 70% of the attention.**
+- **Attention concentration:** the separate 135M diagnostic averaged 64.6% raw attention mass in the rounded top group (5-6.8% of tokens). The committed 3B reconstruction report does not record a 70% concentration measurement; do not present one.
 - **TieredKV:** rank tokens by attention, then spend atoms where attention goes.
 
 | Tier | Share of tokens | Atoms (example, 15% budget) |
@@ -37,7 +37,7 @@ Visual: one vector → a stacked bar of 8 coloured atoms.
 | Light | bottom 75% | 5 |
 | **Average** | | **9, the same as Lexico's uniform s = 9** |
 
-- **We use mean attention, not summed.** Summed attention mostly picks the earliest tokens: in our measurement, 50% of the "important" tokens were in the first 10% of positions. Mean attention cuts that to 31%.
+- **We normalize by causal query opportunities.** Older tokens receive more prefill observations. Mean mode divides accumulated attention by the number of visible queries. It changes rankings but does not guarantee position-independent scores or better task accuracy.
 
 ---
 
@@ -73,13 +73,13 @@ From `python -m tieredkv.check_dict`: Llama-3.2-3B, 5 GSM8K prompts, s = 8.
 | Keys | 0.38 | 0.20 | **−49%** |
 | Values | 0.53 | 0.27 | **−48%** |
 
-  The model "sees" about half the reconstruction error for the same memory, even before any accuracy run.
+  In this small same-prompt diagnostic, the attention-weighted reconstruction metric fell by about half. This does not measure downstream attention/output error or answer accuracy.
   Caveat: this uses the same prompt attention for both choosing and weighting. Generation accuracy is the real test.
 - **Are important tokens harder to compress?**
-  - **Keys: yes.** Spearman ρ between attention and error has a median of +0.53, and it's positive in 100% of the 140 (prompt × layer) pairs. Top-5% keys have error 0.50 vs 0.38 for the bottom 75% at the same s.
-  - **Values: no.** ρ ≈ 0.03, and the error is the same for heavy and light tokens (0.59 vs 0.59).
-  - So, honestly: for keys, important tokens are both harder to compress *and* matter more. For values, they only matter more.
-- **Speed (per prompt, all 28 layers, K+V):** encoding the prompt takes 1.5 s, done once. Decoding all compressed tokens takes 0.10 s. If the decode happens on every generated token, that adds about 25 s per problem, so the cache should decode each chunk once.
+  - **Keys in this probe:** Spearman ρ between attention and error has a median of +0.53, and it's positive in 100% of the 140 (prompt × layer) pairs. Top-5% keys have error 0.50 vs 0.38 for the bottom 75% at the same s.
+  - **Values in this probe:** ρ ≈ 0.03, and the error is the same for heavy and light tokens (0.59 vs 0.59).
+  - The key result supports the motivation in this probe; the value result is weak. Neither establishes that allocation improves task accuracy.
+- **Diagnostic timing:** the committed reconstruction probe reports 1.5 s encoding and 0.10 s decoding per prompt. These are not generation-throughput results. Measure the full decode loop; retaining decoded dense tensors would change the memory cost.
 
 ---
 
@@ -94,7 +94,7 @@ From `python -m tieredkv.check_dict`: Llama-3.2-3B, 5 GSM8K prompts, s = 8.
 ## Likely judge questions
 
 - **Q: Isn't this just H₂O followed by Lexico?**
-  A: No. H₂O deletes tokens, and Lexico treats all tokens the same. We keep every token and use attention to decide each token's precision. Importance-aware precision already exists for quantization (MiKV, ZipCache), but not for dictionary atoms.
+  A: No. H₂O deletes tokens, and Lexico treats all tokens the same. We keep every token and use attention to decide each token's precision. Importance-aware precision already exists for quantization (MiKV, ZipCache), Our implemented change is to allocate sparse-coding atom counts by normalized attention; avoid claiming literature-wide novelty without a documented review.
 - **Q: Where did the dictionaries come from?**
   A: Lexico doesn't release any. We trained our own with Lexico's objective, on WikiText (no GSM8K test data), in 45 minutes on a laptop GPU.
 - **Q: Why 3B, not 8B?**

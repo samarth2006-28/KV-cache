@@ -15,6 +15,7 @@ import random
 import re
 
 STOP = ["Question:", "</s>", "<|im_end|>", "<|eot_id|>", "<|end_of_text|>"]
+DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 _STRICT = re.compile(r"#### (\-?[0-9\.\,]+)")
 _FLEX = re.compile(r"(-?[$0-9.,]{2,})|(-?[0-9]+)")
 
@@ -26,7 +27,9 @@ def target_of(answer):
 def load_subset(n, seed=0, split="test"):
     """Fixed random subset of n problems: [{"idx", "question", "answer", "target"}]."""
     from datasets import load_dataset
-    ds = load_dataset("openai/gsm8k", "main", split=split)
+    ds = load_dataset("openai/gsm8k", "main", split=split, revision=DATASET_REVISION)
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 < n <= len(ds):
+        raise ValueError("n must be a positive integer no larger than the selected split")
     order = list(range(len(ds)))
     random.Random(seed).shuffle(order)
     return [{"idx": i, "question": ds[i]["question"], "answer": ds[i]["answer"],

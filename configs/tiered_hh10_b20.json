@@ -7,7 +7,7 @@
   "score_mode": "mean",
   "cfg": {
     "window": 32,
-    "chunk": 32,
+    "chunk": 8,
     "tiers": [
       0.1,
       0.2
@@ -19,6 +19,6 @@
     ],
     "evict_light": false
   },
-  "status": "pending_shared_compressed_generation",
-  "note": "Select the same model, dictionary and fixed subset n for all three runs. Use shared eval.run with cfg; the CLI does not load JSON configs. Projected allocation diagnostics are not benchmark results."
+  "status": "ready_for_integrated_validation",
+  "note": "Shared eval supports --config. Use the same model, dictionary and subset n for all thresholds. Task results require per-problem and aggregate budget audits; allocation projections are not accuracy results."
 }

@@ -3,13 +3,15 @@
     python plot.py                       # -> results/plots/{acc_vs_budget,ablation}.{png,svg}, table.md
     python plot.py --csv other.csv --out somewhere/
 
-acc and budget columns may be fractions (0.42) or percents (42); both are handled.
+acc and budget columns are fractions by default; use --units percent for percent CSVs.
 Main methods: full, lexico, h2o, tiered. Any other method name (e.g. tiered_hh3,
 tiered_24-8-2, tiered_evict) is treated as an ablation variant.
 If a (method, budget_target) pair appears more than once, the last row wins.
 """
 import argparse
 import csv
+import json
+import math
 import os
 
 import matplotlib
@@ -17,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from tieredkv.gsm8k import wilson
+from tieredkv.budget_audit import audit_rows
 
 MAIN = ["tiered", "lexico", "h2o"]                        # fixed order = fixed colour
 COLOR = {"tiered": "#2a78d6", "lexico": "#eb6834", "h2o": "#1baf7a"}
@@ -25,20 +28,41 @@ LABEL = {"tiered": "TieredKV (ours)", "lexico": "Lexico (uniform s)", "h2o": "Hâ
 INK, INK2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 
 
-def _pct(x):
+def _pct(x, units="fraction"):
+    if units not in ("fraction","percent"):
+        raise ValueError("units must be fraction or percent")
     x = float(x)
-    return x * 100 if x <= 1.0 else x
+    if not math.isfinite(x):
+        raise ValueError("plot values must be finite")
+    return x * 100 if units == "fraction" else x
 
 
-def load(path):
+def load(path, units="fraction"):
     rows = {}
+    cohort = None
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
-            r["acc"], r["n"] = _pct(r["acc"]), int(float(r["n"]))
-            r["budget_measured"] = _pct(r["budget_measured"])
-            r["budget_target"] = _pct(r["budget_target"])
+            r["acc"], r["n"] = _pct(r["acc"],units), int(float(r["n"]))
+            if not 0 <= r["acc"] <= 100 or r["n"] < 1:
+                raise ValueError("accuracy must be in [0,100] percent and n must be positive")
+            current = tuple(r.get(key,"") for key in ("model","task","seed"))+(r["n"],)
+            if cohort is not None and current != cohort:
+                raise ValueError("mixed model/task/seed/subset sizes; plot each comparison separately")
+            cohort = current
+            r["budget_measured"] = _pct(r["budget_measured"],units)
+            r["budget_target"] = _pct(r["budget_target"],units)
             rows[(r["method"], round(r["budget_target"], 3))] = r
     return list(rows.values())
+
+
+def comparison_rows(rows):
+    """Audit latest rows after deduplication; preserve rejected cells in a report."""
+    report = audit_rows(rows, units="percent")
+    for row,check in zip(rows,report):
+        if str(row.get("eligible","true")).lower() not in ("true","1"):
+            check["eligible"] = False
+            check["reason"] = "runner flagged per-problem or aggregate budget audit"
+    return [r for r,check in zip(rows,report) if check["eligible"]], report
 
 
 def _ci(r):
@@ -70,8 +94,7 @@ def plot_main(rows, out):
         pts = sorted((r for r in rows if r["method"] == m), key=lambda r: r["budget_measured"])
         if not pts:
             continue
-        dodge = (k - 1) * 0.25   # display-only x shift so CIs at the same budget don't overlap
-        x, y = [r["budget_measured"] + dodge for r in pts], [r["acc"] for r in pts]
+        x, y = [r["budget_measured"] for r in pts], [r["acc"] for r in pts]
         err = list(zip(*[_ci(r) for r in pts]))
         ax.errorbar(x, y, yerr=err, color=COLOR[m], linewidth=2, marker="o", markersize=8,
                     markeredgecolor=SURFACE, markeredgewidth=2, capsize=0, elinewidth=1.2,
@@ -92,6 +115,8 @@ def plot_ablation(rows, out):
     abl = [r for r in rows if r["method"] not in MAIN + ["full"]]
     if not abl:
         return
+    if len({r["budget_target"] for r in abl}) != 1:
+        raise ValueError("ablation plot needs one target budget at a time")
     target = abl[0]["budget_target"]
     ref = [r for r in rows if r["method"] in ("tiered", "lexico") and abs(r["budget_target"] - target) < 1e-6]
     items = sorted(abl + ref, key=lambda r: r["acc"])
@@ -135,9 +160,14 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--csv", default="results/results.csv")
     p.add_argument("--out", default="results/plots")
+    p.add_argument("--units", choices=("fraction","percent"), default="fraction")
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    rows = load(a.csv)
+    rows, report = comparison_rows(load(a.csv,a.units))
+    with open(os.path.join(a.out,"budget_audit.json"),"w",encoding="utf-8") as f:
+        json.dump(report,f,indent=2,allow_nan=False)
+    if not rows:
+        p.error("no eligible matched-budget rows; see budget_audit.json")
     plot_main(rows, a.out)
     plot_ablation(rows, a.out)
     md = table(rows)

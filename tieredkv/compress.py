@@ -136,7 +136,11 @@ class SparseKV:
         pos = _ragged_arange(lens) + start.repeat_interleave(lens)
         indptr = torch.zeros(rows.numel() + 1, dtype=torch.int32, device=rows.device)
         indptr[1:] = lens.cumsum(0)
-        return SparseKV(indptr, self.indices[pos], self.data[pos], h)
+        # Torch 2.5 CPU has no FP8 advanced-indexing kernel. Select the raw
+        # bytes so coefficients retain their exact bits and compact dtype.
+        data = (self.data.view(torch.uint8)[pos].view(self.data.dtype)
+                if self.data.element_size() == 1 else self.data[pos])
+        return SparseKV(indptr, self.indices[pos], data, h)
 
 
 def _ragged_arange(lens):
@@ -148,7 +152,7 @@ def _ragged_arange(lens):
 
 def load_dictionary(path, layer, device=None, dtype=torch.float16):
     """(key_dict, value_dict) for one layer from a Lexico dictionary file, each [head_dim, N]."""
-    D = torch.load(path, map_location="cpu")
+    D = torch.load(path, map_location="cpu", weights_only=True)
     return D[2 * layer].to(device, dtype), D[2 * layer + 1].to(device, dtype)
 
 
@@ -163,6 +167,8 @@ def omp(D, Y, s, eps=1e-6):
     D [L, d, N], Y [L, B, d] -> [L, B, s]. Greedy: the first k atoms chosen with s atoms
     are exactly the atoms chosen with k atoms.
     """
+    if isinstance(s, bool) or not isinstance(s, int) or not 1 <= s <= D.shape[-1]:
+        raise ValueError("OMP s must be a positive integer no larger than the dictionary")
     single = D.dim() == 2
     if single:
         D, Y = D[None], Y[None]
@@ -195,12 +201,19 @@ def encode_kv(kv, dictionary, s_per_token, coef_dtype=torch.float8_e4m3fn, chunk
     Tokens are grouped by s and each group runs one batched OMP.
     """
     n, h, d = kv.shape
-    if dictionary.shape[0] != d:
+    if dictionary.ndim != 2 or dictionary.shape[0] != d or dictionary.shape[1] < 1:
         raise ValueError(f"dictionary is {tuple(dictionary.shape)}, expected [{d}, N]")
     if dictionary.shape[1] > 32768:
         raise ValueError("int16 indices need dictionary size <= 32768")
     dev = kv.device
-    s_tok = torch.as_tensor(s_per_token, device=dev).long().flatten()
+    requested = torch.as_tensor(s_per_token, device=dev)
+    if (not torch.isfinite(requested).all() or
+            (requested != requested.long()).any() or
+            (requested < 0).any() or (requested > dictionary.shape[1]).any()):
+        raise ValueError("s_per_token must contain integer counts in [0, dictionary size]")
+    if isinstance(chunk, bool) or not isinstance(chunk, int) or chunk < 1:
+        raise ValueError("chunk must be a positive integer")
+    s_tok = requested.long().flatten()
     if s_tok.numel() == 1:
         s_tok = s_tok.expand(n)
     if s_tok.numel() != n:

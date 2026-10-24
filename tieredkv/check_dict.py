@@ -66,7 +66,7 @@ def check(model, prompts, dict_path, s_values=(2, 4, 8, 16, 32), probe_s=8, avg_
             enc = dec = 0.0
             for l in range(n_layers):
                 mass = tr.acc[l][0]                                   # attention received
-                mean = mass / tr.cnt[l][0].clamp(min=1)               # bias-free importance
+                mean = mass / tr.cnt[l][0].clamp(min=1)               # opportunity-normalized importance
                 order = mean.argsort(descending=True)
                 T = mass.numel()
                 top, bottom = order[:max(1, round(tiers[0] * T))], order[round((tiers[0] + tiers[1]) * T):]

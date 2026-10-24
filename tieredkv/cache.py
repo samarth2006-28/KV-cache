@@ -27,6 +27,8 @@ Pinned to transformers==4.49.0 (same as Lexico). Batch size 1 for every method b
     out = model.generate(**inputs, past_key_values=cache, max_new_tokens=256, do_sample=False)
 """
 from typing import Any, Dict, List, Optional, Tuple
+import math
+from pathlib import Path
 import warnings
 
 import torch
@@ -51,9 +53,15 @@ _DICTS = {}
 
 def _load_dictionary(path):
     """Whole Lexico dictionary file [2L, d, N], loaded once per process (caches are per problem)."""
-    if path not in _DICTS:
-        _DICTS[path] = torch.load(path, map_location="cpu")
-    return _DICTS[path]
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    key = (str(resolved), stat.st_mtime_ns, stat.st_size)
+    if key not in _DICTS:
+        # A dictionary may be retrained at the same path in an interactive run.
+        for stale in [k for k in _DICTS if k[0] == str(resolved)]:
+            del _DICTS[stale]
+        _DICTS[key] = torch.load(resolved, map_location="cpu", weights_only=True)
+    return _DICTS[key]
 
 
 def _nbytes(x):
@@ -76,6 +84,14 @@ class TieredKVCache(Cache):
         super().__init__()
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+        if isinstance(budget, bool) or not math.isfinite(budget) or not 0 < budget <= 1:
+            raise ValueError("budget must be a fraction in (0,1]")
+        for name, value, minimum in (("window", window, 0), ("chunk", chunk, 1),
+                                     ("expected_new_tokens", expected_new_tokens, 0)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        if avg_s is not None and (isinstance(avg_s, bool) or not isinstance(avg_s, int) or avg_s < 1):
+            raise ValueError("avg_s must be a positive integer")
         if method in ("h2o", "tiered") and tracker is None:
             raise ValueError(f"method={method!r} needs a ScoreTracker (tracker=...)")
         if (method in ("lexico", "tiered") and dictionary is None and dictionary_path is None
@@ -157,6 +173,10 @@ class TieredKVCache(Cache):
             if D is None:
                 self._layer_dicts[layer_idx] = (None, None)
             else:
+                if (D.ndim != 3 or D.shape[0] < 2*(layer_idx+1) or D.shape[0] % 2 or
+                        D.shape[1] != self.key_cache[layer_idx].shape[-1] or
+                        not 1 <= D.shape[2] <= 32768):
+                    raise ValueError("dictionary must be [2*layers, head_dim, atoms<=32768] for this model")
                 self._layer_dicts[layer_idx] = (D[2 * layer_idx].to(device, torch.float16),
                                                 D[2 * layer_idx + 1].to(device, torch.float16))
         return self._layer_dicts[layer_idx]
@@ -180,7 +200,9 @@ class TieredKVCache(Cache):
         """lexico / tiered: encode all but the last W recent tokens once recent exceeds W + C."""
         recent_k, recent_v = self.key_cache[layer_idx], self.value_cache[layer_idx]
         n_rec = recent_k.shape[-2]
-        if n_rec <= self.window + self.chunk:
+        # Compression runs before the incoming token is appended. Trigger at
+        # the boundary so the post-update recent buffer never grows to W+C+1.
+        if n_rec < self.window + self.chunk:
             return
         if recent_k.shape[0] != 1:
             raise NotImplementedError("compression supports batch size 1")
@@ -194,8 +216,12 @@ class TieredKVCache(Cache):
         else:
             self._check_tracker(layer_idx, first + n_rec)
             scores = self.tracker.scores(layer_idx)[0, first:first + n_old]
+            Dk, _ = self._layer_dictionary(layer_idx, recent_k.device)
+            max_atoms = min(64, Dk.shape[-1]) if Dk is not None else 64
+            if avg_s > max_atoms:
+                raise ValueError("uniform avg_s exceeds the dictionary/allocator atom limit")
             s = self.allocate_fn(scores, avg_s, self.tiers, self.ratios, self.evict_light,
-                                 bytes_fn=compress.bytes_per_token).to(recent_k.device)
+                                 bytes_fn=compress.bytes_per_token, s_max=max_atoms).to(recent_k.device)
 
         live = s > 0                         # s = 0: evicted light token, stored nowhere
         old_k = recent_k[0, :, :n_old].transpose(0, 1)[live]     # [n_live, h, d]

@@ -1,5 +1,8 @@
 # Phase 3: H2O reference baseline and smoke matrix
 
+Historical run report. Shared integration was subsequently added on
+b-allocator-integration-review; see integration_review.md for current status.
+
 This contribution stays in Sampreeth's modules. Vishal's `cache.py` and `eval.py`
 are not modified. The reference is not a production inference engine and is not
 the team's target-model benchmark.
