@@ -134,7 +134,7 @@ def test_controller_checkpoints_portable_artifacts_and_archives_failures(tmp_pat
     dictionary=tmp_path/"dictionary.pt"
     torch.save(torch.ones(2,64,64),dictionary)
     dictionary.with_suffix(".json").write_text(json.dumps({"model":"target"}))
-    fake=types.SimpleNamespace(config=types.SimpleNamespace(head_dim=64,num_hidden_layers=1),
+    fake=types.SimpleNamespace(config=types.SimpleNamespace(head_dim=64,num_hidden_layers=1,_commit_hash="a"*40),
                                device=torch.device("cuda"),
                                parameters=lambda:iter([torch.ones(1,dtype=torch.float16)]))
     monkeypatch.setattr(torch.cuda,"is_available",lambda:True)

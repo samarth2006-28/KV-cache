@@ -161,6 +161,8 @@ def run_experiment(args):
         model,tok=ev.load_model(args.model)
         if next(model.parameters()).dtype not in (torch.float16,torch.bfloat16) or model.device.type!="cuda":
             raise ValueError("require fp16/bf16 model weights on CUDA")
+        if getattr(model.config,"_commit_hash",None)!=args.model_revision:
+            raise ValueError("loaded snapshot revision differs from requested model commit")
         print("Checking dictionary shape and values",flush=True)
         D=torch.load(args.dictionary,map_location="cpu",weights_only=True)
         d=getattr(model.config,"head_dim",None) or model.config.hidden_size//model.config.num_attention_heads
