@@ -1,0 +1,2 @@
+method,budget_target,budget_measured,acc,acc_flex,kv_mb,peak_gb,tok_s,ms_tok,s_prob,n,seed,task,model,git_sha
+full,1.0,1.0,0.7,0.7,22.25,2.455,20.15,49.63,3.22,10,0,gsm8k,unsloth/Llama-3.2-1B-Instruct,69ae372
