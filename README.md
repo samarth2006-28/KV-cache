@@ -18,6 +18,9 @@ Lexico gives every token the same number of dictionary atoms `s`. TieredKV uses 
 | `notebooks/colab_gpu_runs.ipynb` | Vishal | Colab GPU run book: plan test 1, full baseline, dictionary, lexico / tiered / h2o at 20%, audit, plot |
 | `tieredkv/eval.py` | Vishal | `run(method, budget, task, n, seed)`: fixed GSM8K subset, greedy 256 tokens, appends one row to `results/results.csv`, per-problem preds to `results/runs/*.jsonl` |
 | `scripts/run_matrix.sh` | Vishal | Whole GSM8K matrix into one CSV (resumes: finished cells are skipped): hit rate, full, 20% methods, 20% ablations (`tiered_kv`, `tiered_evict`), other budgets; then audit, McNemar and plot |
+| `demo/app.py` | Vishal | Live demo: one question, full vs TieredKV vs Lexico side by side (answer, KV MB, time) and the question's tokens shaded by TieredKV's atoms. `pip install gradio`, then `python demo/app.py --dictionary dicts/llama32_3b_N4096_s16.pt` |
+| `scripts/plot_bars.py` | Vishal | Slide figure: accuracy per method at one budget with 95% CIs, full cache as reference |
+| `results/REPORT.md` | Vishal | Results write-up: 20% matrix, McNemar, comparison with the Lexico/H2O papers, findings |
 | `tieredkv/hit_rate.py` | Vishal | Heavy-hitter hit rate: do tokens ranked important from prompt attention get the attention during generation? Also attention H2O loses by evicting |
 | `tieredkv/compare.py` | Samarth | Paired per-problem McNemar between two methods, strict and flexible |
 | `tieredkv/check_dict.py` | Samarth | Dictionary sanity check: error vs s, timing, attention-vs-error correlation, attention-weighted error |
