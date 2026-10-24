@@ -1,0 +1,107 @@
+{
+  "run_id": "6377b721c1a640ab8197fec3e194d73a",
+  "method": "h2o",
+  "cfg": {},
+  "model": "unsloth/Llama-3.2-1B-Instruct",
+  "model_revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "dtype": "torch.float16",
+  "seed": 0,
+  "n": 5,
+  "max_new_tokens": 256,
+  "score_mode": "sum",
+  "test_indices": [
+    120,
+    192,
+    474,
+    991,
+    1101
+  ],
+  "shot_indices": [
+    797,
+    3169,
+    5780,
+    6203,
+    6526
+  ],
+  "budget_target": 0.2,
+  "aggregate_audit": {
+    "csv_line": 2,
+    "method": "h2o",
+    "eligible": true,
+    "difference_pp": 0.06999999999999784,
+    "reason": ""
+  },
+  "problem_audits": [
+    {
+      "csv_line": 2,
+      "method": "h2o",
+      "eligible": true,
+      "difference_pp": 0.045045045045044585,
+      "reason": "",
+      "problem_idx": 120
+    },
+    {
+      "csv_line": 2,
+      "method": "h2o",
+      "eligible": true,
+      "difference_pp": 0.05312084993359667,
+      "reason": "",
+      "problem_idx": 192
+    },
+    {
+      "csv_line": 2,
+      "method": "h2o",
+      "eligible": true,
+      "difference_pp": 0.11095700416088594,
+      "reason": "",
+      "problem_idx": 474
+    },
+    {
+      "csv_line": 2,
+      "method": "h2o",
+      "eligible": true,
+      "difference_pp": 0.06578947368421073,
+      "reason": "",
+      "problem_idx": 991
+    },
+    {
+      "csv_line": 2,
+      "method": "h2o",
+      "eligible": true,
+      "difference_pp": 0.08978675645342216,
+      "reason": "",
+      "problem_idx": 1101
+    }
+  ],
+  "eligible": true,
+  "git_sha": "8345d31",
+  "torch": "2.11.0+cu128",
+  "dictionary_note": "Dictionary must match this model; path is in cfg.",
+  "memory_denominator": "full fp16 KV, not the model dtype",
+  "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
+  "effective_cache": {
+    "window": 32,
+    "chunk": 8,
+    "tiers": [
+      0.05,
+      0.2
+    ],
+    "ratios": [
+      32,
+      12,
+      4
+    ],
+    "evict_light": false,
+    "budget_policy": "fixed"
+  },
+  "source_sha256": {
+    "eval.py": "85a17ac7dd9dbbc01675a9f5bc7d3c4a37c9f67d133468bbc343aeadd4101d65",
+    "cache.py": "212f29cfa267641b01a449e5f16b33323eb4e67b7b1d7a5c7fa5cfc3977c1496",
+    "allocator.py": "00e9716db7b60f5f0a1b2da6cb23d3ddaa1e559661ec9ffe22093b71ac14b4ca",
+    "compress.py": "05888af14dc8c02eadbac79dde9bab16f63844b9401b890d515ac9cbf864bcfd",
+    "gsm8k.py": "db945ad6373612300b9bebf221c8a0a3d0ed2736548b52b7dd813b4e9f1b07d2",
+    "profile.py": "32565f844a1a777b5b1e53e4d8a541b09cde912b5fcee2a774bb7e70eda7e5f8"
+  },
+  "dictionary_sha256": null,
+  "limitations": "Budget audit is not a statistical accuracy or speedup test."
+}

@@ -1,0 +1,4 @@
+method,budget_target,budget_measured,acc,acc_flex,kv_mb,peak_gb,tok_s,ms_tok,s_prob,n,seed,task,model,git_sha,run_id,eligible
+lexico,0.2,0.2085,0.0,0.0,4.8,2.502,7.25,137.89,16.47,5,0,gsm8k,unsloth/Llama-3.2-1B-Instruct,8345d31,31a39235511d49eeb5867824e58cae69,False
+tiered,0.2,0.2057,0.0,0.0,5.04,2.496,6.27,159.44,25.4,5,0,gsm8k,unsloth/Llama-3.2-1B-Instruct,8345d31,02dd2cc0eb604f15b43974848df6fce2,False
+h2o,0.2,0.2007,0.0,0.0,5.22,2.45,18.05,55.39,12.31,5,0,gsm8k,unsloth/Llama-3.2-1B-Instruct,8345d31,6377b721c1a640ab8197fec3e194d73a,True

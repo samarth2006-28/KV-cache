@@ -1,0 +1,30 @@
+[
+  {
+    "csv_line": 2,
+    "method": "lexico",
+    "eligible": false,
+    "difference_pp": 0.5499999999999972,
+    "reason": "runner flagged per-problem or aggregate budget audit"
+  },
+  {
+    "csv_line": 3,
+    "method": "tiered",
+    "eligible": false,
+    "difference_pp": 0.5,
+    "reason": "runner flagged per-problem or aggregate budget audit"
+  },
+  {
+    "csv_line": 4,
+    "method": "full",
+    "eligible": true,
+    "difference_pp": 0.0,
+    "reason": ""
+  },
+  {
+    "csv_line": 5,
+    "method": "h2o",
+    "eligible": true,
+    "difference_pp": 0.03999999999999915,
+    "reason": ""
+  }
+]
