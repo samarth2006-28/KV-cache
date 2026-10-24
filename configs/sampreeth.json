@@ -1,0 +1,19 @@
+{
+  "owner": "Sampreeth",
+  "task": "gsm8k",
+  "seed": 0,
+  "window": 32,
+  "chunk": 32,
+  "h2o": {
+    "method": "h2o",
+    "score_mode": "sum",
+    "strict_budget": true,
+    "budgets": [0.10, 0.15, 0.20, 0.25]
+  },
+  "threshold_ablation": {
+    "score_mode": "mean",
+    "budget": 0.20,
+    "methods": ["tiered_hh3", "tiered", "tiered_hh10"]
+  },
+  "note": "Run descriptors for the shared runner; not measured results. Baseline tiered is the 5% threshold. W=32 follows c-eval; test actual byte feasibility on every prompt. Select n/model/dictionaries on shared compute. The runner must construct the tracker with the specified score_mode and use strict H2O selection."
+}
