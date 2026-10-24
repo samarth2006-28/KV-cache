@@ -1,0 +1,24 @@
+{
+  "owner": "Sampreeth",
+  "method": "tiered_hh3",
+  "budget": 0.2,
+  "task": "gsm8k",
+  "seed": 0,
+  "score_mode": "mean",
+  "cfg": {
+    "window": 32,
+    "chunk": 32,
+    "tiers": [
+      0.03,
+      0.2
+    ],
+    "ratios": [
+      32,
+      12,
+      4
+    ],
+    "evict_light": false
+  },
+  "status": "pending_shared_compressed_generation",
+  "note": "Select the same model, dictionary and fixed subset n for all three runs. Use shared eval.run with cfg; the CLI does not load JSON configs. Projected allocation diagnostics are not benchmark results."
+}
