@@ -89,7 +89,7 @@ def parse_method(name):
 
 def make_cache(method, budget, cfg, tracker=None, max_new_tokens=MAX_NEW_TOKENS):
     base, variant = parse_method(method)
-    kw = {k: cfg[k] for k in ("tiers", "ratios", "evict_light", "avg_s") if k in cfg}
+    kw = {k: cfg[k] for k in ("tiers", "ratios", "evict_light", "avg_s", "budget_policy") if k in cfg}
     return TieredKVCache(base, budget=budget, window=cfg.get("window", WINDOW),
                          chunk=cfg.get("chunk", CHUNK), dictionary_path=cfg.get("dictionary"),
                          tracker=tracker, expected_new_tokens=max_new_tokens, **{**variant, **kw})
@@ -234,7 +234,7 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
                 "dataset_revision":gsm8k.DATASET_REVISION,
                 "effective_cache":{"window":cache.window,"chunk":cache.chunk,
                                    "tiers":cache.tiers,"ratios":cache.ratios,
-                                   "evict_light":cache.evict_light},
+                                   "evict_light":cache.evict_light,"budget_policy":cache.budget_policy},
                 "source_sha256":{name:_file_sha256(Path(__file__).parent/name) for name in
                     ("eval.py","cache.py","allocator.py","compress.py","gsm8k.py","profile.py")},
                 "dictionary_sha256":_file_sha256(cfg["dictionary"]) if cfg.get("dictionary") else None,

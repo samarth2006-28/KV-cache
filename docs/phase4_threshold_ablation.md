@@ -2,6 +2,10 @@
 
 Historical Phase 4 diagnostic; current integration status is in integration_review.md.
 
+The subsequent strict-budget GPU runner is described in phase4_colab.md. It does
+not replace or relabel this historical fixed-policy result. Target-model task
+accuracy remains pending execution of that runner.
+
 Status: configs and real-score allocation diagnostics complete. **The task-accuracy
 ablation is blocked, not completed.** Sampreeth owns the 3/5/10% threshold experiment
 at a nominal 20% KV budget (team plan, allocator step 7).

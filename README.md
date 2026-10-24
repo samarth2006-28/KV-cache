@@ -60,6 +60,12 @@ For the Lexico baseline, `solve_s(budget, N, W)` gives the uniform `s`. Tiered r
 
 ## Integrated validation and threshold runs
 
+For the current Phase-4 GPU runner, use
+[notebooks/phase4_thresholds_colab.ipynb](notebooks/phase4_thresholds_colab.ipynb).
+See [docs/phase4_colab.md](docs/phase4_colab.md) for its strict byte policy,
+dictionary requirements and result audits. It prepares and executes the experiment;
+local code tests are not completed target-model accuracy results.
+
 The integration-review branch combines c-eval with the allocator phases and latest
 shared main. See [docs/integration_review.md](docs/integration_review.md) for tested
 behavior and remaining target-model gates. Score normalization corrects observation

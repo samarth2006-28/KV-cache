@@ -22,7 +22,8 @@
       "tiered_hh3",
       "tiered",
       "tiered_hh10"
-    ]
+    ],
+    "budget_policy": "strict"
   },
   "note": "Run descriptors for the shared runner; not measured results. Baseline tiered is the 5% threshold. W=32 follows c-eval; test actual byte feasibility on every prompt. Select n/model/dictionaries on shared compute. The runner must construct the tracker with the specified score_mode and use strict H2O selection."
 }

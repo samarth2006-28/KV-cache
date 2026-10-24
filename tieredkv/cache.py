@@ -8,7 +8,7 @@ Owner: Vishal. Contract (see plan section 7):
 
 Per layer the cache stores `sparse` (compressed old tokens, original order) + `recent`
 (dense, last tokens). At the START of update(), before appending the new token: if recent
-holds more than W + C tokens, everything but the last W is compressed (prefill: the whole
+reaches W + C tokens, everything but the last W is compressed before appending (prefill: the whole
 prompt at once; decode: C tokens every C steps). Starting there guarantees the tracker has
 scores for every stored token, since its hook writes them after attention.
 
@@ -73,17 +73,24 @@ class TieredKVCache(Cache):
                  budget: float = 1.0, tracker=None, dictionary=None,
                  dictionary_path: Optional[str] = None, avg_s: Optional[int] = None,
                  expected_new_tokens: int = 256, tiers=(0.05, 0.20), ratios=(32, 12, 4),
-                 evict_light: bool = False, allocate_fn=None, encode_fn=None, decode_fn=None):
+                 evict_light: bool = False, allocate_fn=None, encode_fn=None, decode_fn=None,
+                 budget_policy: str = "fixed"):
         """window W: dense recent tokens (shared by all methods). chunk C: decode tokens
         compressed at once. budget: target memory fraction of full fp16 KV.
         tracker: allocator.ScoreTracker on the same model (mode="mean" for tiered, "sum" for h2o).
         dictionary: [2L, d, N] tensor (D[2l] keys, D[2l+1] values), or dictionary_path.
         avg_s: atoms per compressed token for lexico (mean for tiered); None -> solved from
         budget at the first compression, with N = prompt + expected_new_tokens.
-        tiers / ratios / evict_light: passed to allocate (tiered only)."""
+        tiers / ratios / evict_light: passed to allocate (tiered only).
+        budget_policy: fixed preserves uniform-byte matching; strict is the HH-only
+        fp16/bf16 adaptive CSR quota, with the dense buffer reserved in advance."""
         super().__init__()
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+        if budget_policy not in ("fixed", "strict"):
+            raise ValueError("budget_policy must be fixed or strict")
+        if budget_policy == "strict" and (method != "tiered" or evict_light or avg_s is not None):
+            raise ValueError("strict policy requires tiered, keep-light and automatic atom allocation")
         if isinstance(budget, bool) or not math.isfinite(budget) or not 0 < budget <= 1:
             raise ValueError("budget must be a fraction in (0,1]")
         for name, value, minimum in (("window", window, 0), ("chunk", chunk, 1),
@@ -102,6 +109,7 @@ class TieredKVCache(Cache):
             if tracker.mode != want:
                 warnings.warn(f"{method} is specified with ScoreTracker(mode={want!r}), got {tracker.mode!r}")
         self.method, self.window, self.chunk, self.budget = method, window, chunk, budget
+        self.budget_policy = budget_policy
         self.tracker, self.dictionary_path = tracker, dictionary_path
         self.dictionary = dictionary
         self.avg_s, self.expected_new_tokens = avg_s, expected_new_tokens
@@ -135,7 +143,8 @@ class TieredKVCache(Cache):
         if self.method == "h2o":
             self._evict(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2])
         elif self.method in ("lexico", "tiered"):
-            self._compress(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2])
+            self._compress(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2],
+                           incoming_tokens=key_states.shape[-2])
         self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
         self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
 
@@ -196,8 +205,30 @@ class TieredKVCache(Cache):
             raise RuntimeError(f"layer {layer_idx}: tracker has {n} scores for {n_stored} cached "
                                "tokens; is the tracker hooked on this model and enabled?")
 
-    def _compress(self, layer_idx, seen_before):
-        """lexico / tiered: encode all but the last W recent tokens once recent exceeds W + C."""
+    def _strict_quota(self, recent, sp, seen_before, incoming_tokens):
+        """Reserve the worst dense occupancy before the next compression.
+
+        Fractional avg_s expresses a byte quota; stored atom counts remain integers.
+        Terminal K/V CSR pointers and existing actual CSR bytes are included.
+        This policy is for the HH-only ablation, not uniform-baseline equivalence.
+        """
+        if recent.dtype not in (torch.float16, torch.bfloat16) or incoming_tokens != 1:
+            raise ValueError("strict policy requires fp16/bf16 KV and single-token decode")
+        compress.configure(n_kv_heads=recent.shape[1], head_dim=recent.shape[-1])
+        full = compress.full_bytes_per_token()
+        future_seen = seen_before + incoming_tokens + self.chunk - 1
+        future_dense = self.window + incoming_tokens + self.chunk - 1
+        old_bytes = sum(_nbytes(c) for c in sp["k"]+sp["v"])
+        sparse_ceiling = self.budget*future_seen*full-future_dense*full
+        n_old = recent.shape[-2]-self.window
+        per_token = (sparse_ceiling-old_bytes-2*compress.INDPTR_BYTES)/n_old
+        avg_s = (per_token/(2*recent.shape[1])-compress.INDPTR_BYTES)/(compress.IDX_BYTES+compress.COEF_BYTES)
+        if avg_s < 1:
+            raise ValueError("strict budget infeasible: dense reserve and minimum sparse payload exceed capacity")
+        return avg_s, sparse_ceiling
+
+    def _compress(self, layer_idx, seen_before, incoming_tokens=1):
+        """Encode all but W recent tokens before the incoming token exceeds W+C."""
         recent_k, recent_v = self.key_cache[layer_idx], self.value_cache[layer_idx]
         n_rec = recent_k.shape[-2]
         # Compression runs before the incoming token is appended. Trigger at
@@ -209,7 +240,14 @@ class TieredKVCache(Cache):
         n_old = n_rec - self.window
         sp = self.sparse[layer_idx] or {"k": [], "v": [], "s": [], "n": 0}
         first = sp["n"]                      # physical index of the first token in recent
-        avg_s = self._resolve_avg_s(recent_k, seen_before)
+        strict = self.budget_policy == "strict"
+        if strict:
+            if recent_v.dtype != recent_k.dtype:
+                raise ValueError("strict policy requires matching K/V dtypes")
+            avg_s, sparse_ceiling = self._strict_quota(recent_k,sp,seen_before,incoming_tokens)
+            self.avg_s = avg_s
+        else:
+            avg_s = self._resolve_avg_s(recent_k, seen_before)
 
         if self.method == "lexico":
             s = torch.full((n_old,), avg_s, dtype=torch.long, device=recent_k.device)
@@ -228,8 +266,14 @@ class TieredKVCache(Cache):
         old_v = recent_v[0, :, :n_old].transpose(0, 1)[live]
         if live.any():
             Dk, Dv = self._layer_dictionary(layer_idx, recent_k.device)
-            sp["k"].append(self.encode_fn(old_k, Dk, s[live]))
-            sp["v"].append(self.encode_fn(old_v, Dv, s[live]))
+            encoded_k = self.encode_fn(old_k, Dk, s[live])
+            encoded_v = self.encode_fn(old_v, Dv, s[live])
+            if strict:
+                total = sum(_nbytes(c) for c in sp["k"]+sp["v"])+_nbytes(encoded_k)+_nbytes(encoded_v)
+                if total > sparse_ceiling+1e-6:
+                    raise RuntimeError("encoded payload exceeds strict byte quota; check storage dtypes")
+            sp["k"].append(encoded_k)
+            sp["v"].append(encoded_v)
             sp["s"].append(s[live])
             sp["n"] += int(live.sum())
         if not live.all():
