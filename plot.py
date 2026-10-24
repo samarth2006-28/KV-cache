@@ -4,6 +4,10 @@
     python plot.py --csv other.csv --out somewhere/
 
 acc and budget columns are fractions by default; use --units percent for percent CSVs.
+--metric acc_flex plots flexible-match accuracy (last number in the answer) instead of strict
+"#### N" accuracy; the table always shows both. --include-flagged keeps rows the budget audit
+rejected, drawn hollow at their measured memory and listed in budget_audit.json.
+--allow-mixed-n permits different n per budget (seeded subsets are nested: n=30 is inside n=40).
 Main methods: full, lexico, h2o, tiered. Any other method name (e.g. tiered_hh3,
 tiered_24-8-2, tiered_evict) is treated as an ablation variant.
 If a (method, budget_target) pair appears more than once, the last row wins.
@@ -37,15 +41,23 @@ def _pct(x, units="fraction"):
     return x * 100 if units == "fraction" else x
 
 
-def load(path, units="fraction"):
+METRIC_LABEL = {"acc": "strict", "acc_flex": "flexible-match"}
+
+
+def load(path, units="fraction", metric="acc", allow_mixed_n=False):
     rows = {}
     cohort = None
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
-            r["acc"], r["n"] = _pct(r["acc"],units), int(float(r["n"]))
+            r["acc_strict"] = _pct(r["acc"], units)
+            r["acc_flexible"] = _pct(r["acc_flex"], units) if r.get("acc_flex") not in (None, "") else None
+            r["acc"] = r["acc_strict"] if metric == "acc" else r["acc_flexible"]
+            if r["acc"] is None:
+                raise ValueError(f"column {metric} missing for {r['method']}")
+            r["n"] = int(float(r["n"]))
             if not 0 <= r["acc"] <= 100 or r["n"] < 1:
                 raise ValueError("accuracy must be in [0,100] percent and n must be positive")
-            current = tuple(r.get(key,"") for key in ("model","task","seed"))+(r["n"],)
+            current = tuple(r.get(key,"") for key in ("model","task","seed"))+(() if allow_mixed_n else (r["n"],))
             if cohort is not None and current != cohort:
                 raise ValueError("mixed model/task/seed/subset sizes; plot each comparison separately")
             cohort = current
@@ -55,14 +67,16 @@ def load(path, units="fraction"):
     return list(rows.values())
 
 
-def comparison_rows(rows):
-    """Audit latest rows after deduplication; preserve rejected cells in a report."""
+def comparison_rows(rows, include_flagged=False):
+    """Audit latest rows after deduplication; preserve rejected cells in a report.
+    include_flagged keeps rejected rows (marked r["flagged"]) instead of dropping them."""
     report = audit_rows(rows, units="percent")
     for row,check in zip(rows,report):
         if str(row.get("eligible","true")).lower() not in ("true","1"):
             check["eligible"] = False
             check["reason"] = "runner flagged per-problem or aggregate budget audit"
-    return [r for r,check in zip(rows,report) if check["eligible"]], report
+        row["flagged"] = not check["eligible"]
+    return [r for r,check in zip(rows,report) if check["eligible"] or include_flagged], report
 
 
 def _ci(r):
@@ -81,7 +95,7 @@ def _style(ax):
     ax.set_axisbelow(True)
 
 
-def plot_main(rows, out):
+def plot_main(rows, out, metric="acc"):
     fig, ax = plt.subplots(figsize=(7.5, 4.6), facecolor=SURFACE)
     _style(ax)
     full = [r for r in rows if r["method"] == "full"]
@@ -99,13 +113,20 @@ def plot_main(rows, out):
         ax.errorbar(x, y, yerr=err, color=COLOR[m], linewidth=2, marker="o", markersize=8,
                     markeredgecolor=SURFACE, markeredgewidth=2, capsize=0, elinewidth=1.2,
                     label=LABEL[m], zorder=3)
+        flagged = [(xi, yi) for xi, yi, r in zip(x, y, pts) if r.get("flagged")]
+        if flagged:   # over budget: hollow marker so it can't pass for a matched point
+            ax.plot(*zip(*flagged), linestyle="none", marker="o", markersize=8, markerfacecolor=SURFACE,
+                    markeredgecolor=COLOR[m], markeredgewidth=2, zorder=4)
         ax.annotate(LABEL[m], (x[-1], y[-1]), xytext=(8, 0), textcoords="offset points",
                     va="center", color=INK, fontsize=9)
     ax.set_xlabel("KV cache memory (% of full, measured)", color=INK2, fontsize=10)
-    ax.set_ylabel("GSM8K accuracy (%)", color=INK2, fontsize=10)
+    ax.set_ylabel(f"GSM8K accuracy, {METRIC_LABEL[metric]} (%)", color=INK2, fontsize=10)
     n = sorted({r["n"] for r in rows})
     ax.set_title(f"Accuracy at matched memory  (n={'/'.join(map(str, n))} problems, 95% CI)",
                  color=INK, fontsize=12, loc="left")
+    if any(r.get("flagged") for r in rows):
+        ax.text(0.0, -0.2, "Hollow marker: over the budget tolerance; plotted at measured memory.",
+                transform=ax.transAxes, color=INK2, fontsize=8)
     ax.legend(frameon=False, fontsize=9, labelcolor=INK, loc="lower right")
     ax.margins(x=0.12)
     _save(fig, out, "acc_vs_budget")
@@ -139,13 +160,17 @@ def plot_ablation(rows, out):
 
 
 def table(rows):
-    head = "| method | target % | measured % | acc % | 95% CI | KV MB | peak GB | tok/s | ms/tok | n |"
-    lines = [head, "|" + "---|" * 10]
+    head = ("| method | target % | measured % | acc % | 95% CI | strict % | flexible % | budget ok | "
+            "KV MB | peak GB | tok/s | ms/tok | n |")
+    lines = [head, "|" + "---|" * 13]
     for r in sorted(rows, key=lambda r: (r["method"], r["budget_target"])):
         lo, hi = _ci(r)
+        flex = "" if r.get("acc_flexible") is None else f"{r['acc_flexible']:.1f}"
         lines.append(f"| {r['method']} | {r['budget_target']:.0f} | {r['budget_measured']:.1f} | "
-                     f"{r['acc']:.1f} | {r['acc'] - lo:.1f}–{r['acc'] + hi:.1f} | {r.get('kv_mb', '')} | "
-                     f"{r.get('peak_gb', '')} | {r.get('tok_s', '')} | {r.get('ms_tok', '')} | {r['n']} |")
+                     f"{r['acc']:.1f} | {r['acc'] - lo:.1f}–{r['acc'] + hi:.1f} | "
+                     f"{r.get('acc_strict', r['acc']):.1f} | {flex} | {'no' if r.get('flagged') else 'yes'} | "
+                     f"{r.get('kv_mb', '')} | {r.get('peak_gb', '')} | {r.get('tok_s', '')} | "
+                     f"{r.get('ms_tok', '')} | {r['n']} |")
     return "\n".join(lines)
 
 
@@ -161,14 +186,17 @@ def main():
     p.add_argument("--csv", default="results/results.csv")
     p.add_argument("--out", default="results/plots")
     p.add_argument("--units", choices=("fraction","percent"), default="fraction")
+    p.add_argument("--metric", choices=("acc", "acc_flex"), default="acc")
+    p.add_argument("--include-flagged", action="store_true")
+    p.add_argument("--allow-mixed-n", action="store_true")
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    rows, report = comparison_rows(load(a.csv,a.units))
+    rows, report = comparison_rows(load(a.csv, a.units, a.metric, a.allow_mixed_n), a.include_flagged)
     with open(os.path.join(a.out,"budget_audit.json"),"w",encoding="utf-8") as f:
         json.dump(report,f,indent=2,allow_nan=False)
     if not rows:
         p.error("no eligible matched-budget rows; see budget_audit.json")
-    plot_main(rows, a.out)
+    plot_main(rows, a.out, a.metric)
     plot_ablation(rows, a.out)
     md = table(rows)
     with open(os.path.join(a.out, "table.md"), "w", encoding="utf-8") as f:
