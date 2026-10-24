@@ -7,23 +7,34 @@ Owner: Vishal. Contract (see plan section 7):
         .kv_bytes() / .measured_budget()       what the cache actually holds vs full fp16
 
 Per layer the cache stores `sparse` (compressed old tokens, original order) + `recent`
-(dense, last W tokens). Phase 1: only method="full" is wired; it keeps everything in
-`recent`, so it is exactly DynamicCache. The compression path (compress on overflow at the
-start of update(), decode_kv + recent on return) lands in phase 2.
+(dense, last tokens). At the START of update(), before appending the new token: if recent
+holds more than W + C tokens, everything but the last W is compressed (prefill: the whole
+prompt at once; decode: C tokens every C steps). Starting there guarantees the tracker has
+scores for every stored token, since its hook writes them after attention.
 
-Pinned to transformers==4.49.0 (same as Lexico). Pass it to generate() like any Cache:
+    full     store everything dense (== DynamicCache)
+    lexico   every compressed token gets the same s = avg_s
+    tiered   s per token from allocator.allocate on H2O scores (same bytes as lexico)
+    h2o      nothing compressed; keep recent W + top-score tokens, evict the rest
+
+Attention gets cat(decode_kv(sparse), recent). allocate_fn / encode_fn / decode_fn default to
+the real allocator.allocate / compress.encode_kv / compress.decode_kv and can be swapped for
+stubs: with a constant allocator and an identity encoder, output must equal method="full".
+
+Pinned to transformers==4.49.0 (same as Lexico). Batch size 1 for every method but full.
 
     cache = TieredKVCache("full")
     out = model.generate(**inputs, past_key_values=cache, max_new_tokens=256, do_sample=False)
 """
 from typing import Any, Dict, List, Optional, Tuple
+import warnings
 
 import torch
 from transformers.cache_utils import Cache
 
-from . import compress
+from . import allocator, compress
 
-__all__ = ["TieredKVCache", "METHODS"]
+__all__ = ["TieredKVCache", "METHODS", "WINDOW", "CHUNK"]
 
 METHODS = ("full", "lexico", "h2o", "tiered")
 
@@ -31,28 +42,62 @@ METHODS = ("full", "lexico", "h2o", "tiered")
 # 15% infeasible on ~1000-token 5-shot GSM8K prompts: the window alone is ~13%. At W=32,
 # compress.solve_s gives s = 4 / 9 / 13 / 17 at 10 / 15 / 20 / 25% for N=1000.
 WINDOW = 32
-CHUNK = 32
+# Tokens compressed together during decode. Recent swings between W and W + C, so C adds up to
+# C/N to the measured budget; 8 keeps that under 1 point (the audit tolerance) at N ~ 1000.
+CHUNK = 8
+
+_DICTS = {}
+
+
+def _load_dictionary(path):
+    """Whole Lexico dictionary file [2L, d, N], loaded once per process (caches are per problem)."""
+    if path not in _DICTS:
+        _DICTS[path] = torch.load(path, map_location="cpu")
+    return _DICTS[path]
+
+
+def _nbytes(x):
+    return x.nbytes   # SparseKV.nbytes, or tensor.nbytes for stub encoders
 
 
 class TieredKVCache(Cache):
     def __init__(self, method: str = "full", *, window: int = WINDOW, chunk: int = CHUNK,
-                 budget: float = 1.0, tracker=None, dictionary_path: Optional[str] = None,
-                 tiers=(0.05, 0.20), ratios=(32, 12, 4), evict_light: bool = False):
-        """window W: dense recent tokens (shared by all methods). chunk C: tokens compressed
-        at once when recent exceeds W + C. budget: target memory fraction of full fp16 KV.
-        tracker: allocator.ScoreTracker on the same model (h2o / tiered).
-        tiers / ratios / evict_light: passed to allocator.allocate (tiered only)."""
+                 budget: float = 1.0, tracker=None, dictionary=None,
+                 dictionary_path: Optional[str] = None, avg_s: Optional[int] = None,
+                 expected_new_tokens: int = 256, tiers=(0.05, 0.20), ratios=(32, 12, 4),
+                 evict_light: bool = False, allocate_fn=None, encode_fn=None, decode_fn=None):
+        """window W: dense recent tokens (shared by all methods). chunk C: decode tokens
+        compressed at once. budget: target memory fraction of full fp16 KV.
+        tracker: allocator.ScoreTracker on the same model (mode="mean" for tiered, "sum" for h2o).
+        dictionary: [2L, d, N] tensor (D[2l] keys, D[2l+1] values), or dictionary_path.
+        avg_s: atoms per compressed token for lexico (mean for tiered); None -> solved from
+        budget at the first compression, with N = prompt + expected_new_tokens.
+        tiers / ratios / evict_light: passed to allocate (tiered only)."""
         super().__init__()
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}, got {method!r}")
-        if method != "full":
-            raise NotImplementedError(f"method={method!r} lands in phase 2; only 'full' is wired")
+        if method in ("h2o", "tiered") and tracker is None:
+            raise ValueError(f"method={method!r} needs a ScoreTracker (tracker=...)")
+        if (method in ("lexico", "tiered") and dictionary is None and dictionary_path is None
+                and encode_fn is None):
+            raise ValueError(f"method={method!r} needs a dictionary (dictionary= or dictionary_path=)")
+        if tracker is not None and method in ("h2o", "tiered"):
+            want = "sum" if method == "h2o" else "mean"
+            if tracker.mode != want:
+                warnings.warn(f"{method} is specified with ScoreTracker(mode={want!r}), got {tracker.mode!r}")
         self.method, self.window, self.chunk, self.budget = method, window, chunk, budget
         self.tracker, self.dictionary_path = tracker, dictionary_path
+        self.dictionary = dictionary
+        self.avg_s, self.expected_new_tokens = avg_s, expected_new_tokens
         self.tiers, self.ratios, self.evict_light = tuple(tiers), tuple(ratios), evict_light
+        self.allocate_fn = allocate_fn or allocator.allocate
+        self.encode_fn = encode_fn or compress.encode_kv
+        self.decode_fn = decode_fn or compress.decode_kv
         self.key_cache: List[torch.Tensor] = []     # recent K per layer
         self.value_cache: List[torch.Tensor] = []   # recent V per layer
-        self.sparse: List[Optional[Tuple[Any, Any]]] = []   # (SparseKV K, SparseKV V) per layer
+        # per layer: None, or {"k": [chunks], "v": [chunks], "s": [LongTensor], "n": tokens}
+        self.sparse: List[Optional[Dict[str, Any]]] = []
+        self._layer_dicts: Dict[int, Tuple[Any, Any]] = {}
         self._seen_tokens = 0
 
     # ------------------------------------------------------------------ Cache API
@@ -60,17 +105,29 @@ class TieredKVCache(Cache):
     def update(self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int,
                cache_kwargs: Optional[Dict[str, Any]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         if layer_idx == 0:
+            if not self.key_cache and self.tracker is not None:
+                self.tracker.reset()   # new sequence: scores from a previous prompt don't apply
             self._seen_tokens += key_states.shape[-2]
         if len(self.key_cache) == layer_idx:
             self.key_cache.append(key_states)
             self.value_cache.append(value_states)
             self.sparse.append(None)
-        elif len(self.key_cache) > layer_idx:
-            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
-        else:
+            return key_states, value_states
+        if len(self.key_cache) < layer_idx:
             raise ValueError(f"layer {layer_idx} updated before layer {len(self.key_cache)}")
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+        if self.method == "h2o":
+            self._evict(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2])
+        elif self.method in ("lexico", "tiered"):
+            self._compress(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2])
+        self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+        self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+        k, v = self.key_cache[layer_idx], self.value_cache[layer_idx]
+        if self.sparse[layer_idx] is None:
+            return k, v
+        dk, dv = self._decode(layer_idx, k.dtype)
+        return torch.cat([dk, k], dim=-2), torch.cat([dv, v], dim=-2)
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         if len(self.key_cache) <= (layer_idx or 0):
@@ -89,13 +146,111 @@ class TieredKVCache(Cache):
     def reorder_cache(self, beam_idx: torch.LongTensor):
         raise NotImplementedError("TieredKVCache supports greedy decoding only")
 
+    # ------------------------------------------------------------------ compression
+
+    def _layer_dictionary(self, layer_idx, device):
+        """(key_dict, value_dict) [d, N] for one layer on device, or (None, None) for stubs."""
+        if layer_idx not in self._layer_dicts:
+            D = self.dictionary
+            if D is None and self.dictionary_path is not None:
+                D = _load_dictionary(self.dictionary_path)
+            if D is None:
+                self._layer_dicts[layer_idx] = (None, None)
+            else:
+                self._layer_dicts[layer_idx] = (D[2 * layer_idx].to(device, torch.float16),
+                                                D[2 * layer_idx + 1].to(device, torch.float16))
+        return self._layer_dicts[layer_idx]
+
+    def _resolve_avg_s(self, recent, seen_before):
+        """Uniform s that hits the budget, set once and shared by lexico and tiered."""
+        if self.avg_s is None:
+            compress.configure(n_kv_heads=recent.shape[1], head_dim=recent.shape[-1])
+            n_total = seen_before + self.expected_new_tokens
+            # Recent averages W + C/2 dense tokens over generation, not W.
+            self.avg_s = compress.solve_s(self.budget, n_total, self.window + self.chunk // 2)
+        return self.avg_s
+
+    def _check_tracker(self, layer_idx, n_stored):
+        n = self.tracker.acc[layer_idx].shape[-1] if layer_idx in self.tracker.acc else 0
+        if n != n_stored:
+            raise RuntimeError(f"layer {layer_idx}: tracker has {n} scores for {n_stored} cached "
+                               "tokens; is the tracker hooked on this model and enabled?")
+
+    def _compress(self, layer_idx, seen_before):
+        """lexico / tiered: encode all but the last W recent tokens once recent exceeds W + C."""
+        recent_k, recent_v = self.key_cache[layer_idx], self.value_cache[layer_idx]
+        n_rec = recent_k.shape[-2]
+        if n_rec <= self.window + self.chunk:
+            return
+        if recent_k.shape[0] != 1:
+            raise NotImplementedError("compression supports batch size 1")
+        n_old = n_rec - self.window
+        sp = self.sparse[layer_idx] or {"k": [], "v": [], "s": [], "n": 0}
+        first = sp["n"]                      # physical index of the first token in recent
+        avg_s = self._resolve_avg_s(recent_k, seen_before)
+
+        if self.method == "lexico":
+            s = torch.full((n_old,), avg_s, dtype=torch.long, device=recent_k.device)
+        else:
+            self._check_tracker(layer_idx, first + n_rec)
+            scores = self.tracker.scores(layer_idx)[0, first:first + n_old]
+            s = self.allocate_fn(scores, avg_s, self.tiers, self.ratios, self.evict_light,
+                                 bytes_fn=compress.bytes_per_token).to(recent_k.device)
+
+        live = s > 0                         # s = 0: evicted light token, stored nowhere
+        old_k = recent_k[0, :, :n_old].transpose(0, 1)[live]     # [n_live, h, d]
+        old_v = recent_v[0, :, :n_old].transpose(0, 1)[live]
+        if live.any():
+            Dk, Dv = self._layer_dictionary(layer_idx, recent_k.device)
+            sp["k"].append(self.encode_fn(old_k, Dk, s[live]))
+            sp["v"].append(self.encode_fn(old_v, Dv, s[live]))
+            sp["s"].append(s[live])
+            sp["n"] += int(live.sum())
+        if not live.all():
+            dev = live.device
+            keep = torch.cat([torch.arange(first, device=dev), first + live.nonzero().flatten(),
+                              torch.arange(first + n_old, first + n_rec, device=dev)])
+            self.tracker.keep(layer_idx, keep)
+        self.sparse[layer_idx] = sp if sp["n"] else None
+        self.key_cache[layer_idx] = recent_k[:, :, n_old:]
+        self.value_cache[layer_idx] = recent_v[:, :, n_old:]
+
+    def _evict(self, layer_idx, seen_before):
+        """h2o: keep the last W + top-scoring tokens dense, at floor(budget * seen) tokens."""
+        k, v = self.key_cache[layer_idx], self.value_cache[layer_idx]
+        n = k.shape[-2]
+        if n <= int(self.budget * seen_before + 1e-12):
+            return
+        if k.shape[0] != 1:
+            raise NotImplementedError("eviction supports batch size 1")
+        self._check_tracker(layer_idx, n)
+        idx = allocator.h2o_keep_idx(self.tracker.scores(layer_idx)[0], float(self.budget),
+                                     self.window, original_length=seen_before, strict=True)
+        idx = idx.to(k.device)
+        self.key_cache[layer_idx] = k[:, :, idx]
+        self.value_cache[layer_idx] = v[:, :, idx]
+        self.tracker.keep(layer_idx, idx)
+
+    def _decode(self, layer_idx, dtype):
+        """Compressed tokens back to dense [1, h, n_sparse, d] for attention."""
+        sp = self.sparse[layer_idx]
+        Dk, Dv = self._layer_dictionary(layer_idx, self.key_cache[layer_idx].device)
+        dk = torch.cat([self.decode_fn(c, Dk, dtype=dtype) for c in sp["k"]])
+        dv = torch.cat([self.decode_fn(c, Dv, dtype=dtype) for c in sp["v"]])
+        return dk.transpose(0, 1).unsqueeze(0), dv.transpose(0, 1).unsqueeze(0)
+
     # ------------------------------------------------------------------ accounting
 
     def stored_tokens(self, layer_idx: int = 0) -> int:
         """Tokens actually held for a layer (dense + compressed, excluding evicted)."""
         n = self.key_cache[layer_idx].shape[-2] if len(self.key_cache) > layer_idx else 0
         sp = self.sparse[layer_idx] if len(self.sparse) > layer_idx else None
-        return n + (sp[0].n_tokens if sp is not None else 0)
+        return n + (sp["n"] if sp is not None else 0)
+
+    def token_s(self, layer_idx: int = 0) -> torch.Tensor:
+        """Atoms per compressed token for a layer, in order (for the demo's tier colouring)."""
+        sp = self.sparse[layer_idx] if len(self.sparse) > layer_idx else None
+        return torch.cat(sp["s"]) if sp is not None else torch.zeros(0, dtype=torch.long)
 
     def kv_bytes(self) -> int:
         """Bytes of KV storage across all layers and the batch (dense tensors + CSR buffers)."""
@@ -103,7 +258,7 @@ class TieredKVCache(Cache):
         for k, v, sp in zip(self.key_cache, self.value_cache, self.sparse):
             total += k.numel() * k.element_size() + v.numel() * v.element_size()
             if sp is not None:
-                total += sp[0].nbytes + sp[1].nbytes
+                total += sum(_nbytes(c) for c in sp["k"] + sp["v"])
         return total
 
     def full_kv_bytes(self) -> int:
