@@ -226,3 +226,46 @@ def test_decode_once_equals_decode_every_step(tiny, dictionary, method, kw):
         ok, ov = off._decode(layer, dk.dtype)
         assert torch.equal(dk, ok) and torch.equal(dv, ov)
     assert on.decoded_bytes() > 0
+
+
+# --------------------------------------------------------------------------- 5. K/V-asymmetric
+
+def test_tiered_kv_stub_equals_full(tiny):
+    """tiered_kv plumbing: keys and values get different s, output still equals full."""
+    with ScoreTracker(tiny, mode="mean") as tr:
+        cache = TieredKVCache("tiered", tracker=tr, value_policy="uniform", **STUBS)
+        out = _gen(tiny, _ids(11), cache)
+    assert torch.equal(out, _full(tiny, _ids(11)))
+    _check_compressed(cache)
+
+
+def test_tiered_kv_keys_tiered_values_uniform(tiny, dictionary):
+    with ScoreTracker(tiny, mode="mean") as tr:
+        cache = TieredKVCache("tiered", tracker=tr, dictionary=dictionary, avg_s=6,
+                              value_policy="uniform", window=W, chunk=CH)
+        _gen(tiny, _ids(12), cache)
+    for layer in range(len(cache)):
+        sk, sv = torch.cat(cache.sparse[layer]["s"]), torch.cat(cache.sparse[layer]["sv"])
+        assert sk.unique().numel() > 1                     # keys follow attention
+        assert (sv == 6).all()                             # values: lexico's uniform s
+        assert C.bytes_per_token(sk).sum() <= len(sk) * C.bytes_per_token(6)   # keys within budget
+
+
+def test_tiered_kv_measured_budget_matches_lexico(tiny, dictionary):
+    budgets = {}
+    for method, kw in (("lexico", {}), ("tiered", {"value_policy": "uniform"})):
+        with ScoreTracker(tiny, mode="mean") as tr:
+            cache = TieredKVCache(method, tracker=tr if method == "tiered" else None, dictionary=dictionary,
+                                  budget=0.6, expected_new_tokens=NEW - 1, window=W, chunk=CH, **kw)
+            _gen(tiny, _ids(13), cache)
+        budgets[method] = sum(c.nbytes for sp in cache.sparse for c in sp["k"] + sp["v"])
+    assert budgets["tiered"] <= budgets["lexico"] * 1.01
+
+
+@pytest.mark.parametrize("kw", [{"method": "lexico"}, {"evict_light": True}, {"budget_policy": "strict"},
+                                {"value_policy": "both"}])
+def test_tiered_kv_bad_combinations(tiny, kw):
+    with ScoreTracker(tiny, mode="mean") as tr:
+        args = {"method": "tiered", "tracker": tr, "dictionary": torch.ones(6, 16, 64), "value_policy": "uniform", **kw}
+        with pytest.raises(ValueError):
+            TieredKVCache(args.pop("method"), **args)

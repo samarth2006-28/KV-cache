@@ -17,7 +17,7 @@ Lexico gives every token the same number of dictionary atoms `s`. TieredKV uses 
 | `tieredkv/profile.py` | Vishal | `DecodeTimer` (decode-only tok/s, ms/token), peak GPU memory |
 | `notebooks/colab_gpu_runs.ipynb` | Vishal | Colab GPU run book: plan test 1, full baseline, dictionary, lexico / tiered / h2o at 20%, audit, plot |
 | `tieredkv/eval.py` | Vishal | `run(method, budget, task, n, seed)`: fixed GSM8K subset, greedy 256 tokens, appends one row to `results/results.csv`, per-problem preds to `results/runs/*.jsonl` |
-| `scripts/run_matrix.sh` | Vishal | Whole GSM8K matrix into one CSV (resumes: finished cells are skipped), then audit, tiered-vs-lexico/h2o McNemar and plot |
+| `scripts/run_matrix.sh` | Vishal | Whole GSM8K matrix into one CSV (resumes: finished cells are skipped): hit rate, full, 20% methods, 20% ablations (`tiered_kv`, `tiered_evict`), other budgets; then audit, McNemar and plot |
 | `tieredkv/hit_rate.py` | Vishal | Heavy-hitter hit rate: do tokens ranked important from prompt attention get the attention during generation? Also attention H2O loses by evicting |
 | `tieredkv/compare.py` | Samarth | Paired per-problem McNemar between two methods, strict and flexible |
 | `tieredkv/check_dict.py` | Samarth | Dictionary sanity check: error vs s, timing, attention-vs-error correlation, attention-weighted error |
@@ -52,7 +52,7 @@ Headline accuracy for Llama-3.2-3B is flexible match (`plot.py --metric acc_flex
 
 The run prints seconds per problem (also the `s_prob` column). Size n with `n = GPU-seconds / (20 × s_prob)`.
 
-Method names: `full`, `lexico`, `h2o`, `tiered`, plus tiered ablations `tiered_hh3`, `tiered_hh10`, `tiered_24-8-2`, `tiered_evict` (suffixes combine, e.g. `tiered_hh3_evict`). `plot.py` treats anything except the four main names as an ablation.
+Method names: `full`, `lexico`, `h2o`, `tiered`, plus tiered ablations `tiered_hh3`, `tiered_hh10`, `tiered_24-8-2`, `tiered_evict`, `tiered_kv` (keys tiered by attention, values uniform) (suffixes combine, e.g. `tiered_hh3_evict`). `plot.py` treats anything except the four main names as an ablation.
 
 Dense recent window: `W = 32` for every method (`cache.WINDOW`). Lexico's default of 128 makes the 10% and 15% budgets impossible on ~1000-token prompts. Decode chunk `C = 8` (`cache.CHUNK`): recent swings between W and W + C dense tokens, so C = 32 would overshoot the measured budget by ~2.5 points.
 

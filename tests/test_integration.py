@@ -122,6 +122,7 @@ def test_every_budget_feasible_at_default_window(budget, s):
     ("tiered_24-8-2", "tiered", {"ratios": (24, 8, 2)}),
     ("tiered_evict", "tiered", {"evict_light": True}),
     ("tiered_hh3_evict", "tiered", {"tiers": (0.03, 0.20), "evict_light": True}),
+    ("tiered_kv", "tiered", {"value_policy": "uniform"}),
 ])
 def test_parse_method(name, base, cfg):
     from tieredkv.eval import parse_method
@@ -161,7 +162,8 @@ def test_runner_row_readable_by_plot(tiny, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("method,budget", [("lexico", 0.5), ("tiered", 0.5), ("h2o", 0.5),
-                                           ("tiered_hh3_evict", 0.5), ("tiered_24-8-2", 0.5)])
+                                           ("tiered_hh3_evict", 0.5), ("tiered_24-8-2", 0.5),
+                                           ("tiered_kv", 0.5)])
 def test_runner_every_method(tiny, tmp_path, monkeypatch, method, budget):
     """eval.run with tracker + dictionary wiring, offline. Small W/C so short prompts compress."""
     import string

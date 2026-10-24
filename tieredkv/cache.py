@@ -15,6 +15,7 @@ scores for every stored token, since its hook writes them after attention.
     full     store everything dense (== DynamicCache)
     lexico   every compressed token gets floor(avg_s) or floor(avg_s) + 1 (uniform)
     tiered   s per token from allocator.allocate on H2O scores (same bytes as lexico)
+             value_policy="uniform" (tiered_kv): only KEYS are tiered, values get lexico's s
     h2o      nothing compressed; keep recent W + top-score tokens, evict the rest
 
 Attention gets cat(decode_kv(sparse), recent). With cache_decoded (default) each chunk is decoded
@@ -80,7 +81,7 @@ class TieredKVCache(Cache):
                  budget: float = 1.0, tracker=None, dictionary=None,
                  dictionary_path: Optional[str] = None, avg_s: Optional[int] = None,
                  expected_new_tokens: int = 256, tiers=(0.05, 0.20), ratios=(32, 12, 4),
-                 evict_light: bool = False, cache_decoded: bool = True,
+                 evict_light: bool = False, cache_decoded: bool = True, value_policy: str = "tiered",
                  allocate_fn=None, encode_fn=None, decode_fn=None, budget_policy: str = "fixed"):
         """window W: dense recent tokens (shared by all methods). chunk C: decode tokens
         compressed at once. budget: target memory fraction of full fp16 KV.
@@ -94,6 +95,10 @@ class TieredKVCache(Cache):
         False re-decodes every chunk on every step, so the GPU really holds only the CSR
         buffers but each step costs O(compressed tokens). kv_bytes() counts the compressed
         storage in both modes; decoded_bytes() reports the extra dense copy.
+        value_policy: "tiered" gives values the keys' atom counts; "uniform" keeps values at
+        lexico's floor(avg_s) / floor(avg_s) + 1, so only keys follow attention (K/V-asymmetric).
+        Motivation (check_dict on 3B): key reconstruction error rises with attention (Spearman
+        +0.53), value error does not (+0.03), so attention says which KEYS need atoms.
         budget_policy: fixed preserves uniform-byte matching; strict is the HH-only
         fp16/bf16 adaptive CSR quota, with the dense buffer reserved in advance."""
         super().__init__()
@@ -101,6 +106,10 @@ class TieredKVCache(Cache):
             raise ValueError(f"method must be one of {METHODS}, got {method!r}")
         if budget_policy not in ("fixed", "strict"):
             raise ValueError("budget_policy must be fixed or strict")
+        if value_policy not in ("tiered", "uniform"):
+            raise ValueError("value_policy must be tiered or uniform")
+        if value_policy == "uniform" and (method != "tiered" or evict_light or budget_policy != "fixed"):
+            raise ValueError("value_policy='uniform' needs method='tiered', keep-light, fixed budget")
         if budget_policy == "strict" and (method != "tiered" or evict_light or avg_s is not None):
             raise ValueError("strict policy requires tiered, keep-light and automatic atom allocation")
         if isinstance(budget, bool) or not math.isfinite(budget) or not 0 < budget <= 1:
@@ -127,6 +136,7 @@ class TieredKVCache(Cache):
         self.avg_s, self.expected_new_tokens = avg_s, expected_new_tokens
         self.tiers, self.ratios, self.evict_light = tuple(tiers), tuple(ratios), evict_light
         self.cache_decoded = cache_decoded
+        self.value_policy = value_policy
         self.allocate_fn = allocate_fn or allocator.allocate
         self.encode_fn = encode_fn or compress.encode_kv
         self.decode_fn = decode_fn or compress.decode_kv
@@ -280,7 +290,7 @@ class TieredKVCache(Cache):
         if recent_k.shape[0] != 1:
             raise NotImplementedError("compression supports batch size 1")
         n_old = n_rec - self.window
-        sp = self.sparse[layer_idx] or {"k": [], "v": [], "s": [], "n": 0}
+        sp = self.sparse[layer_idx] or {"k": [], "v": [], "s": [], "sv": [], "n": 0}
         first = sp["n"]                      # physical index of the first token in recent
         strict = self.budget_policy == "strict"
         if strict:
@@ -302,13 +312,15 @@ class TieredKVCache(Cache):
                 raise ValueError("uniform avg_s exceeds the dictionary/allocator atom limit")
             s = self.allocate_fn(scores, avg_s, self.tiers, self.ratios, self.evict_light,
                                  bytes_fn=compress.bytes_per_token, s_max=max_atoms).to(recent_k.device)
+        s_v = (self._uniform_s(layer_idx, n_old, avg_s, recent_k.device)
+               if self.value_policy == "uniform" else s)
 
         live = s > 0                         # s = 0: evicted light token, stored nowhere
         old_k = recent_k[0, :, :n_old].transpose(0, 1)[live]     # [n_live, h, d]
         old_v = recent_v[0, :, :n_old].transpose(0, 1)[live]
         if live.any():
             Dk, Dv = self._layer_dictionary(layer_idx, recent_k.device)
-            ck, cv = self.encode_fn(old_k, Dk, s[live]), self.encode_fn(old_v, Dv, s[live])
+            ck, cv = self.encode_fn(old_k, Dk, s[live]), self.encode_fn(old_v, Dv, s_v[live])
             if strict:
                 total = sum(_nbytes(c) for c in sp["k"]+sp["v"])+_nbytes(ck)+_nbytes(cv)
                 if total > sparse_ceiling+1e-6:
@@ -316,6 +328,7 @@ class TieredKVCache(Cache):
             sp["k"].append(ck)
             sp["v"].append(cv)
             sp["s"].append(s[live])
+            sp["sv"].append(s_v[live])
             sp["n"] += int(live.sum())
             if self.cache_decoded:
                 dk = self.decode_fn(ck, Dk, dtype=recent_k.dtype).transpose(0, 1).unsqueeze(0)

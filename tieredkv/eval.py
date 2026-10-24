@@ -20,6 +20,7 @@ built from "_"-joined suffixes, which parse_method turns into cache settings:
     tiered_hh3 / tiered_hh10     heavy-hitter tier = top 3% / 10%   (default 5% = plain "tiered")
     tiered_24-8-2                tier ratios (24, 8, 2)             (default 32-12-4)
     tiered_evict                 evict the light tier               (default keep)
+    tiered_kv                    tier keys only; values uniform     (K/V-asymmetric)
 Suffixes combine, e.g. tiered_hh3_evict.
 """
 import argparse
@@ -84,16 +85,19 @@ def parse_method(name):
             cfg["tiers"] = (int(x[2:]) / 100, 0.20)
         elif x.count("-") == 2 and x.replace("-", "").isdigit():
             cfg["ratios"] = tuple(int(r) for r in x.split("-"))
+        elif x == "kv":
+            cfg["value_policy"] = "uniform"
         elif x == "evict":
             cfg["evict_light"] = True
         else:
-            raise ValueError(f"{name!r}: unknown variant {x!r} (hhN, A-B-C, evict)")
+            raise ValueError(f"{name!r}: unknown variant {x!r} (hhN, A-B-C, evict, kv)")
     return base, cfg
 
 
 def make_cache(method, budget, cfg, tracker=None, max_new_tokens=MAX_NEW_TOKENS):
     base, variant = parse_method(method)
-    kw = {k: cfg[k] for k in ("tiers", "ratios", "evict_light", "avg_s", "budget_policy") if k in cfg}
+    kw = {k: cfg[k] for k in ("tiers", "ratios", "evict_light", "avg_s", "budget_policy", "value_policy")
+          if k in cfg}
     return TieredKVCache(base, budget=budget, window=cfg.get("window", WINDOW),
                          chunk=cfg.get("chunk", CHUNK), dictionary_path=cfg.get("dictionary"),
                          tracker=tracker, expected_new_tokens=cfg.get("expected_new_tokens",
@@ -245,7 +249,8 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
                                    "tiers":cache.tiers,"ratios":cache.ratios,
                                    "evict_light":cache.evict_light,"budget_policy":cache.budget_policy,
                                    "expected_new_tokens":cache.expected_new_tokens,
-                                   "cache_decoded":cache.cache_decoded},
+                                   "cache_decoded":cache.cache_decoded,
+                                   "value_policy":cache.value_policy},
                 "source_sha256":{name:_file_sha256(Path(__file__).parent/name) for name in
                     ("eval.py","cache.py","allocator.py","compress.py","gsm8k.py","profile.py")},
                 "dictionary_sha256":_file_sha256(cfg["dictionary"]) if cfg.get("dictionary") else None,
