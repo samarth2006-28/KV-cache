@@ -13,22 +13,7 @@ from .allocator import ScoreTracker
 from .budget_audit import audit_rows
 from .cache import TieredKVCache
 from .threshold_ablation import VARIANTS
-
-
-def dictionary_metadata(path, model_id, expected_sha256=None):
-    path=Path(path)
-    if not path.is_file():
-        raise ValueError("trained dictionary .pt is missing")
-    meta_path=path.with_suffix(".json")
-    if not meta_path.is_file():
-        raise ValueError("dictionary training metadata .json must accompany the .pt")
-    meta=json.loads(meta_path.read_text(encoding="utf-8"))
-    if meta.get("model")!=model_id:
-        raise ValueError("dictionary training model does not match --model-id")
-    digest=ev._file_sha256(path)
-    if expected_sha256 and digest!=expected_sha256:
-        raise ValueError("dictionary SHA256 differs from expected value")
-    return {"sha256":digest,"metadata_sha256":ev._file_sha256(meta_path),"training":meta}
+from .notebook_support import dictionary_metadata
 
 
 def generation_gates(model,tok,dictionary,problems,shots):
@@ -38,15 +23,21 @@ def generation_gates(model,tok,dictionary,problems,shots):
             stop_strings=gsm8k.STOP,tokenizer=tok,pad_token_id=tok.eos_token_id)
     with torch.inference_mode():
         for problem in problems[:5]:
+            print(f"Generation gates: problem {len(checks)+1}/{min(5,len(problems))}, idx={problem['idx']}",flush=True)
             ids=tok(gsm8k.build_prompt(problem["question"],shots),return_tensors="pt")["input_ids"].to(model.device)
             common={"attention_mask":torch.ones_like(ids),**kw}
+            print("  Stock generation",flush=True)
             stock=model.generate(ids,**common)
+            print("  Shared full cache",flush=True)
             full=model.generate(ids,past_key_values=TieredKVCache("full"),**common)
             with ScoreTracker(model,mode="sum") as tracker:
+                print("  H2O at 100%",flush=True)
                 h2o=model.generate(ids,past_key_values=TieredKVCache("h2o",tracker=tracker),**common)
             lex_cache=TieredKVCache("lexico",dictionary_path=dictionary,avg_s=8)
+            print("  Uniform compression (real encoder)",flush=True)
             uniform=model.generate(ids,past_key_values=lex_cache,**common)
             with ScoreTracker(model,mode="mean") as tracker:
+                print("  Equal-ratio tiered compression (real encoder)",flush=True)
                 tier_cache=TieredKVCache("tiered",tracker=tracker,dictionary_path=dictionary,
                                         avg_s=8,ratios=(16,16,16))
                 equal=model.generate(ids,past_key_values=tier_cache,**common)
@@ -58,6 +49,7 @@ def generation_gates(model,tok,dictionary,problems,shots):
             checks.append(check)
             if not all(v for k,v in check.items() if k!="idx"):
                 raise ValueError(f"generation equivalence gate failed: {check}")
+            print("  All generation gates passed",flush=True)
     return checks
 
 
@@ -165,20 +157,24 @@ def run_experiment(args):
         (out/"experiment.json").write_text(json.dumps(portable,indent=2,allow_nan=False),encoding="utf-8")
     save()
     try:
+        print(f"Loading pinned model: {args.model_id} @ {args.model_revision}",flush=True)
         model,tok=ev.load_model(args.model)
         if next(model.parameters()).dtype not in (torch.float16,torch.bfloat16) or model.device.type!="cuda":
             raise ValueError("require fp16/bf16 model weights on CUDA")
+        print("Checking dictionary shape and values",flush=True)
         D=torch.load(args.dictionary,map_location="cpu",weights_only=True)
         d=getattr(model.config,"head_dim",None) or model.config.hidden_size//model.config.num_attention_heads
         if D.ndim!=3 or D.shape[:2]!=(2*model.config.num_hidden_layers,d) or not 32<=D.shape[-1]<=32768 or not torch.isfinite(D).all():
             raise ValueError("dictionary shape/data is incompatible with the loaded model")
         del D
+        print(f"Loading fixed GSM8K subset: n={args.n}, seed={args.seed}",flush=True)
         problems=gsm8k.load_subset(args.n,args.seed)
         shots=gsm8k.fewshot(5)
         state["generation_gates"]=generation_gates(model,tok,args.dictionary,problems,shots)
         state["status"]="running";save()
         descriptors=Path(__file__).resolve().parents[1]/"configs"
         for method,fraction in VARIANTS.items():
+            print(f"Starting threshold run: {method} ({fraction:.0%} heavy), 20% KV target",flush=True)
             descriptor=json.loads((descriptors/f"{method}_b20.json").read_text(encoding="utf-8"))
             cfg={**descriptor["cfg"],"dictionary":args.dictionary,"score_mode":"mean"}
             if cfg.get("budget_policy")!="strict" or cfg["tiers"]!=[fraction,.20]:

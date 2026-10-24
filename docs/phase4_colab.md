@@ -10,7 +10,7 @@ metadata. Supply the team's existing .pt and adjacent training .json on Drive.
 
 ## What is improved
 
-Validation: **251 tests passed, 1 target-model test skipped** on Torch 2.5.1+cpu
+Validation: **256 tests passed, 1 target-model test skipped** on Torch 2.5.1+cpu
 and Transformers 4.49.0. All eight notebook code cells parse successfully, with
 no prefilled benchmark outputs. Controller tests mock GPU work while exercising
 real checkpointing, independent analysis, plotting, portable paths and archives.
@@ -42,6 +42,14 @@ run the three strict descriptors together. Strict allocation can vary its quota
 by compression batch, so this is a separate, explicit budget schedule.
 
 ## Notebook execution
+
+The notebook setup explicitly adds the checkout to the kernel import path;
+changing folders alone is insufficient in a notebook kernel. Asset checks use a
+lightweight module so they do not load stale Torch/Transformers kernel imports.
+The experiment runs in an unbuffered child process, streams progress, saves a
+complete .log next to its output directory and raises a visible error containing
+the original child traceback on failure. Reopen the GitHub notebook after
+updating: an existing Drive copy does not automatically receive these changes.
 
 The notebook:
 - checks CUDA and requires at least 10 GiB VRAM for this 3B workflow;
