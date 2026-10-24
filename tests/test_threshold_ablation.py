@@ -85,4 +85,3 @@ def test_configs_match_shared_parser_and_only_change_threshold():
     assert comparable[0] == comparable[1] == comparable[2]
     cfgs = [{k:v for k,v in c["cfg"].items() if k != "tiers"} for c in configs]
     assert cfgs[0] == cfgs[1] == cfgs[2]
-

@@ -109,4 +109,3 @@ python -m tieredkv.threshold_ablation --model LOCAL_MODEL_DIR --model-id Hugging
 Outputs are allocation_diagnostics.csv, summary.json and scores_IDX.pt.
 The CSV deliberately has no acc or budget_measured columns, so allocation
 projections cannot silently enter the shared task-results table.
-
