@@ -176,3 +176,16 @@ def test_real_encoder_hits_budget(tiny, dictionary, method):
     measured = (sparse + C.full_bytes_per_token() * len(cache) * n_dense) / full
     assert measured == pytest.approx(budget, abs=0.03)
     assert cache.avg_s == C.solve_s(budget, PROMPT + NEW - 1, W + CH // 2)
+
+
+@pytest.mark.parametrize("method", ["lexico", "tiered"])
+def test_decode_once_equals_decode_every_step(tiny, dictionary, method):
+    """Reusing each chunk's decoded copy must not change outputs, only speed."""
+    outs = []
+    for once in (True, False):
+        with ScoreTracker(tiny, mode="mean") as tr:
+            cache = TieredKVCache(method, tracker=tr if method == "tiered" else None,
+                                  dictionary=dictionary, avg_s=5, window=W, chunk=CH, decode_once=once)
+            outs.append(_gen(tiny, _ids(9), cache))
+        assert (cache.working_bytes() > 0) == once
+    assert torch.equal(*outs)

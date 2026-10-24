@@ -42,7 +42,7 @@ from .budget_audit import audit_rows
 
 __all__ = ["run", "load_model", "parse_method", "COLUMNS"]
 
-DEFAULT_MODEL = os.environ.get("TIEREDKV_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+DEFAULT_MODEL = os.environ.get("TIEREDKV_MODEL", "unsloth/Llama-3.2-3B-Instruct")  # team model (fits 8 GB)
 RESULTS = os.environ.get("TIEREDKV_RESULTS", "results/results.csv")
 COLUMNS = ["method", "budget_target", "budget_measured", "acc", "acc_flex", "kv_mb", "peak_gb",
            "tok_s", "ms_tok", "s_prob", "n", "seed", "task", "model", "git_sha",

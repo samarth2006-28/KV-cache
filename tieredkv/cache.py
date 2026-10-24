@@ -17,7 +17,11 @@ scores for every stored token, since its hook writes them after attention.
     tiered   s per token from allocator.allocate on H2O scores (same bytes as lexico)
     h2o      nothing compressed; keep recent W + top-score tokens, evict the rest
 
-Attention gets cat(decode_kv(sparse), recent). allocate_fn / encode_fn / decode_fn default to
+Attention gets cat(decode_kv(sparse), recent). With decode_once (default) each chunk is decoded
+once when it is compressed and the dense copy is reused every step: decoding everything per step
+costs ~25 s per GSM8K problem on 3B (Samarth's check_dict timing). kv_bytes() counts only the
+compressed storage, as Lexico reports; working_bytes() reports the decoded copy separately (a
+fused sparse-attention kernel would remove it). allocate_fn / encode_fn / decode_fn default to
 the real allocator.allocate / compress.encode_kv / compress.decode_kv and can be swapped for
 stubs: with a constant allocator and an identity encoder, output must equal method="full".
 
@@ -73,8 +77,8 @@ class TieredKVCache(Cache):
                  budget: float = 1.0, tracker=None, dictionary=None,
                  dictionary_path: Optional[str] = None, avg_s: Optional[int] = None,
                  expected_new_tokens: int = 256, tiers=(0.05, 0.20), ratios=(32, 12, 4),
-                 evict_light: bool = False, allocate_fn=None, encode_fn=None, decode_fn=None,
-                 budget_policy: str = "fixed"):
+                 evict_light: bool = False, decode_once: bool = True,
+                 allocate_fn=None, encode_fn=None, decode_fn=None, budget_policy: str = "fixed"):
         """window W: dense recent tokens (shared by all methods). chunk C: decode tokens
         compressed at once. budget: target memory fraction of full fp16 KV.
         tracker: allocator.ScoreTracker on the same model (mode="mean" for tiered, "sum" for h2o).
@@ -82,6 +86,7 @@ class TieredKVCache(Cache):
         avg_s: atoms per compressed token for lexico (mean for tiered); None -> solved from
         budget at the first compression, with N = prompt + expected_new_tokens.
         tiers / ratios / evict_light: passed to allocate (tiered only).
+        decode_once: keep a decoded copy per chunk instead of re-decoding every step.
         budget_policy: fixed preserves uniform-byte matching; strict is the HH-only
         fp16/bf16 adaptive CSR quota, with the dense buffer reserved in advance."""
         super().__init__()
@@ -114,12 +119,14 @@ class TieredKVCache(Cache):
         self.dictionary = dictionary
         self.avg_s, self.expected_new_tokens = avg_s, expected_new_tokens
         self.tiers, self.ratios, self.evict_light = tuple(tiers), tuple(ratios), evict_light
+        self.decode_once = decode_once
         self.allocate_fn = allocate_fn or allocator.allocate
         self.encode_fn = encode_fn or compress.encode_kv
         self.decode_fn = decode_fn or compress.decode_kv
         self.key_cache: List[torch.Tensor] = []     # recent K per layer
         self.value_cache: List[torch.Tensor] = []   # recent V per layer
-        # per layer: None, or {"k": [chunks], "v": [chunks], "s": [LongTensor], "n": tokens}
+        # per layer: None, or {"k": [chunks], "v": [chunks], "s": [LongTensor], "n": tokens,
+        #                      "dk" / "dv": decoded copy [1, h, n, d] (decode_once only)}
         self.sparse: List[Optional[Dict[str, Any]]] = []
         self._layer_dicts: Dict[int, Tuple[Any, Any]] = {}
         self._seen_tokens = 0
@@ -266,16 +273,20 @@ class TieredKVCache(Cache):
         old_v = recent_v[0, :, :n_old].transpose(0, 1)[live]
         if live.any():
             Dk, Dv = self._layer_dictionary(layer_idx, recent_k.device)
-            encoded_k = self.encode_fn(old_k, Dk, s[live])
-            encoded_v = self.encode_fn(old_v, Dv, s[live])
+            ck, cv = self.encode_fn(old_k, Dk, s[live]), self.encode_fn(old_v, Dv, s[live])
             if strict:
-                total = sum(_nbytes(c) for c in sp["k"]+sp["v"])+_nbytes(encoded_k)+_nbytes(encoded_v)
+                total = sum(_nbytes(c) for c in sp["k"]+sp["v"])+_nbytes(ck)+_nbytes(cv)
                 if total > sparse_ceiling+1e-6:
                     raise RuntimeError("encoded payload exceeds strict byte quota; check storage dtypes")
-            sp["k"].append(encoded_k)
-            sp["v"].append(encoded_v)
+            sp["k"].append(ck)
+            sp["v"].append(cv)
             sp["s"].append(s[live])
             sp["n"] += int(live.sum())
+            if self.decode_once:
+                dk = self.decode_fn(ck, Dk, dtype=recent_k.dtype).transpose(0, 1).unsqueeze(0)
+                dv = self.decode_fn(cv, Dv, dtype=recent_v.dtype).transpose(0, 1).unsqueeze(0)
+                sp["dk"] = torch.cat([sp["dk"], dk], dim=-2) if "dk" in sp else dk
+                sp["dv"] = torch.cat([sp["dv"], dv], dim=-2) if "dv" in sp else dv
         if not live.all():
             dev = live.device
             keep = torch.cat([torch.arange(first, device=dev), first + live.nonzero().flatten(),
@@ -304,6 +315,8 @@ class TieredKVCache(Cache):
     def _decode(self, layer_idx, dtype):
         """Compressed tokens back to dense [1, h, n_sparse, d] for attention."""
         sp = self.sparse[layer_idx]
+        if self.decode_once:
+            return sp["dk"], sp["dv"]
         Dk, Dv = self._layer_dictionary(layer_idx, self.key_cache[layer_idx].device)
         dk = torch.cat([self.decode_fn(c, Dk, dtype=dtype) for c in sp["k"]])
         dv = torch.cat([self.decode_fn(c, Dv, dtype=dtype) for c in sp["v"]])
@@ -330,6 +343,11 @@ class TieredKVCache(Cache):
             if sp is not None:
                 total += sum(_nbytes(c) for c in sp["k"] + sp["v"])
         return total
+
+    def working_bytes(self) -> int:
+        """Bytes of decoded copies kept for attention (decode_once); not part of kv_bytes."""
+        return sum(t.numel() * t.element_size() for sp in self.sparse if sp is not None
+                   for t in (sp.get("dk"), sp.get("dv")) if t is not None)
 
     def full_kv_bytes(self) -> int:
         """Bytes a full fp16 cache would use for every token seen so far."""
