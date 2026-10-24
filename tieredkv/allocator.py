@@ -12,6 +12,7 @@ a pre-hook forces it per attention module) and >= 4.48 (eager always returns wei
 The model MUST be loaded with attn_implementation="eager".
 """
 from functools import partial
+import math
 import warnings
 
 import torch
@@ -24,7 +25,9 @@ __all__ = ["h2o_scores", "ScoreTracker", "allocate", "h2o_keep_idx", "check_attn
 
 def h2o_scores(attn):
     """attn [b, n_heads, q, k] -> [b, k]: sum over queries, mean over heads (fp32)."""
-    return attn.sum(dim=2, dtype=torch.float32).mean(dim=1)
+    if attn.dim() != 4 or any(d == 0 for d in attn.shape[:3]):
+        raise ValueError("attention must be [batch, heads, queries, keys] with nonempty first axes")
+    return attn.detach().sum(dim=2, dtype=torch.float32).mean(dim=1)
 
 
 def check_attn(attn, atol=1e-2):
@@ -56,6 +59,11 @@ class ScoreTracker:
     mode="mean": accumulated attention / number of queries that could see the key.
                  Removes the causal bias toward old tokens (key j at prefill is seen by
                  N - j queries, so "sum" mostly ranks by position). Recommended for allocate().
+
+    Automatic hooks assume unpadded causal decoder attention. For padding, sliding
+    windows or custom visibility, call add(..., valid_mask=mask) explicitly, with
+    the hook disabled. True means a query can see a key, including zero-weight
+    attention entries. Raw numerators remain in acc, opportunity counts in cnt.
     """
 
     def __init__(self, model, mode="sum", check=False):
@@ -81,14 +89,32 @@ class ScoreTracker:
         with torch.no_grad():
             self.add(layer, w.detach())
 
-    def add(self, layer, attn):
+    @torch.no_grad()
+    def add(self, layer, attn, valid_mask=None):
         """Accumulate one attention call [b, H, q, k] (called by the hook; public for tests)."""
         if self.check:
             check_attn(attn)
         b, _, q, k = attn.shape
+        if q > k:
+            raise ValueError("decoder queries must be a suffix of the physical cache")
         s = h2o_scores(attn)
+        if valid_mask is None:
+            counts = (k - torch.arange(k, device=s.device)).clamp(max=q).to(s.dtype)
+        else:
+            mask = torch.as_tensor(valid_mask, device=attn.device)
+            if mask.dtype != torch.bool:
+                raise ValueError("valid_mask must be boolean; True means visible")
+            if mask.dim() == 3:
+                mask = mask[:, None]
+            if (mask.dim() != 4 or mask.shape[0] != b or
+                    mask.shape[1] not in (1, attn.shape[1]) or tuple(mask.shape[2:]) != (q, k)):
+                raise ValueError("valid_mask must be [b,q,k], [b,1,q,k] or [b,heads,q,k]")
+            s = h2o_scores(attn * mask)
+            counts = h2o_scores(mask.float())
         acc = self.acc.get(layer, s.new_zeros(b, 0))
         cnt = self.cnt.get(layer, s.new_zeros(b, 0))
+        if acc.shape[0] != b or acc.device != s.device:
+            raise ValueError("batch or device changed; reset the tracker for a new run")
         n = acc.shape[1]
         if n > k:
             raise RuntimeError(
@@ -99,16 +125,16 @@ class ScoreTracker:
         # Queries in this call that can see key j: the last q of k positions are queries,
         # so key j is visible to min(q, k - j). Decode (q=1) -> 1 for every key, which stays
         # correct after eviction since every cached key precedes the new query.
-        j = torch.arange(k, device=s.device)
         self.acc[layer] = acc + s
-        self.cnt[layer] = cnt + (k - j).clamp(max=q).to(s.dtype)
+        self.cnt[layer] = cnt + counts
 
     def scores(self, layer, idx=None):
         """[b, len(idx)] scores for cache positions idx (all positions if idx is None)."""
         acc = self.acc[layer]
         if self.mode == "mean":
-            acc = acc / self.cnt[layer].clamp(min=1)
-        return acc if idx is None else _take(acc, idx)
+            count = self.cnt[layer]
+            acc = acc / count.masked_fill(count == 0, 1)
+        return acc.clone() if idx is None else _take(acc, idx)
 
     def keep(self, layer, idx):
         """Re-align after eviction: keep only cache positions idx (in their new order)."""
@@ -123,6 +149,12 @@ class ScoreTracker:
         for h in self._handles:
             h.remove()
         self._handles.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.remove()
 
 
 # --------------------------------------------------------------------------- allocation
@@ -218,22 +250,40 @@ def allocate(scores, avg_s, tiers=(0.05, 0.20), ratios=(32, 12, 4), evict_light=
     return out
 
 
-def h2o_keep_idx(scores, budget, W):
+def h2o_keep_idx(scores, budget, W, *, original_length=None, strict=False):
     """H2O baseline: indices to KEEP (ascending), = last W tokens + top heavy hitters.
 
     scores: [k] or [b, k]. budget: number of tokens to keep (int, includes the W recent), or a
-    fraction of k if float <= 1. Never keeps fewer than min(W, k).
+    fraction of original_length (defaults to k) if float <= 1. Pass the number
+    of tokens seen before eviction as original_length on repeated calls, rather
+    than applying the fraction to an already-pruned cache. Fractional budgets
+    round DOWN. strict=True rejects a budget smaller than the recent window;
+    legacy callers keep that window and receive an overspending warning.
     """
     if scores.dim() == 2:
-        return torch.stack([h2o_keep_idx(r, budget, W) for r in scores])
+        return torch.stack([h2o_keep_idx(r, budget, W, original_length=original_length,
+                                         strict=strict) for r in scores])
+    if scores.dim() != 1 or not torch.isfinite(scores).all():
+        raise ValueError("scores must be finite and shaped [k] or [batch,k]")
+    if isinstance(W, bool) or not isinstance(W, int) or W < 0:
+        raise ValueError("W must be a nonnegative integer")
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget < 0:
+        raise ValueError("budget must be a nonnegative finite token count or fraction")
     k = scores.numel()
-    n_keep = int(round(budget * k)) if isinstance(budget, float) and budget <= 1.0 else int(budget)
+    original_length = k if original_length is None else original_length
+    if isinstance(original_length, bool) or not isinstance(original_length, int) or original_length < k:
+        raise ValueError("original_length must be an integer >= physical cache length")
+    n_keep = math.floor(budget * original_length + 1e-12) if isinstance(budget, float) and budget <= 1.0 else int(budget)
     w = min(W, k)
+    if n_keep < w:
+        if strict:
+            raise ValueError("budget cannot hold the protected recent window")
+        warnings.warn("H2O recent window exceeds the requested budget; use strict=True for matched-budget runs")
     n_keep = min(k, max(n_keep, w))
     dev = scores.device
     recent = torch.arange(k - w, k, device=dev)
     n_hh = n_keep - w
     if n_hh <= 0:
         return recent
-    hh = torch.topk(scores[: k - w].float(), n_hh).indices.sort().values
+    hh = torch.argsort(scores[: k - w].float(), descending=True, stable=True)[:n_hh].sort().values
     return torch.cat([hh.to(dev), recent])
