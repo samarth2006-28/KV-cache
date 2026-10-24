@@ -204,14 +204,25 @@ def test_lexico_measured_budget_within_audit(budget, prompt, new):
     assert s.float().mean().item() == pytest.approx(c.avg_s, abs=0.01)
 
 
-@pytest.mark.parametrize("method", ["lexico", "tiered"])
-def test_decode_once_equals_decode_every_step(tiny, dictionary, method):
-    """Reusing each chunk's decoded copy must not change outputs, only speed."""
-    outs = []
-    for once in (True, False):
+# --------------------------------------------------------------------------- 4. decode once
+
+@pytest.mark.parametrize("method,kw", [("lexico", {}), ("tiered", {}), ("tiered", {"evict_light": True})])
+def test_decode_once_equals_decode_every_step(tiny, dictionary, method, kw):
+    """cache_decoded=True keeps one dense copy per chunk; tokens and bytes match re-decoding."""
+    outs, caches = [], []
+    for cached in (False, True):
         with ScoreTracker(tiny, mode="mean") as tr:
             cache = TieredKVCache(method, tracker=tr if method == "tiered" else None,
-                                  dictionary=dictionary, avg_s=5, window=W, chunk=CH, decode_once=once)
+                                  dictionary=dictionary, avg_s=6, window=W, chunk=CH,
+                                  cache_decoded=cached, **kw)
             outs.append(_gen(tiny, _ids(9), cache))
-        assert (cache.working_bytes() > 0) == once
-    assert torch.equal(*outs)
+            caches.append(cache)
+    assert torch.equal(outs[0], outs[1])
+    off, on = caches
+    assert off.kv_bytes() == on.kv_bytes() and off.decoded_bytes() == 0
+    for layer in range(len(on)):
+        dk, dv = on._decoded[layer]
+        assert dk.shape[-2] == on.sparse[layer]["n"]
+        ok, ov = off._decode(layer, dk.dtype)
+        assert torch.equal(dk, ok) and torch.equal(dv, ov)
+    assert on.decoded_bytes() > 0
