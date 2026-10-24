@@ -27,9 +27,13 @@ problems, same dictionary.
 |---|---|---|
 | Full KV (100%) | 67.5% | 100% |
 | **TieredKV (ours)** | **35.0%** | 52% |
-| TieredKV-KV (keys tiered, values uniform) | *see REPORT.md* | |
+| TieredKV-KV (keys tiered, values uniform)* | 20.0% (CI 10.5–34.8%, strict 2.5%, 19.9% memory) | 30% |
 | Lexico | 32.5% | 48% |
 | H₂O | 10.0% | 15% |
+
+\* tiered_kv ran with expected_new_tokens 64; the others used 192. It is worse than TieredKV
+(p = 0.07) and Lexico (p = 0.30), so **tiering keys and values together is our better variant**.
+It writes `####` in 6/40 answers (TieredKV 2, Lexico 19, full 35).
 
 - **Compression beats deletion.** TieredKV and Lexico both beat H₂O by more than 3× at the same
   memory. This is statistically significant: McNemar p = 0.002 and p = 0.035.

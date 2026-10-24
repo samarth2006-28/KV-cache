@@ -100,9 +100,39 @@ only ~14% of attention costs 57 accuracy points: the low-attention tokens still 
 This matches ReFreeKV (arXiv 2502.16886), which reports H₂O keeping ~3% of full-cache GSM8K
 performance at a 20% budget.
 
-## Pending (queued on the GPU)
+## tiered_kv (K/V-asymmetric)
 
-- `tiered_kv` (novelty): tier only the keys, keep values at Lexico's uniform atoms. Motivated by the
-  dictionary check: key error rises with attention (Spearman +0.53, positive in 140/140 cases),
-  value error does not (+0.03). Expected to also protect the formatting tokens' values.
-- `tiered_evict`: evict the light tier instead of compressing it.
+Keys are tiered by attention; values get Lexico's uniform atoms. This was motivated by the
+dictionary check: key error rises with attention (Spearman +0.53, positive in 140/140 cases), but
+value error does not (+0.03). Same model, problems, dictionary and 20% target as above. One
+difference: it ran with `expected_new_tokens` 64 (current code), while the four cells above used
+192.
+
+| Method | Memory | Flexible | 95% CI | Strict | Eligible | s / problem |
+|---|---|---|---|---|---|---|
+| tiered_kv | 19.9% | **20.0%** (8/40) | 10.5–34.8% | 2.5% | True (0/40 problems over) | 127.9* |
+
+\* Includes about one hour when the laptop went to sleep mid-problem (one problem logged
+3,547 s). Without that problem it is about 40 s per problem, close to tiered's 48.9.
+
+Paired exact McNemar (`results/final/tiered_kv_vs_*.md`):
+
+| tiered_kv vs lexico | n | tiered_kv % | lexico % | only tiered_kv | only lexico | p |
+|---|---|---|---|---|---|---|
+| flexible | 40 | 20.0 | 32.5 | 5 | 10 | 0.302 |
+| strict | 40 | 2.5 | 20.0 | 1 | 8 | 0.0391 |
+
+| tiered_kv vs tiered | n | tiered_kv % | tiered % | only tiered_kv | only tiered | p |
+|---|---|---|---|---|---|---|
+| flexible | 40 | 20.0 | 35.0 | 1 | 7 | 0.0703 |
+| strict | 40 | 2.5 | 0.0 | 1 | 0 | 1 |
+
+**Format tokens:** answers containing "####" were tiered_kv 6/40, tiered 2/40, Lexico 19/40 and
+full 35/40. Giving values uniform atoms restores a little of the format, but not much.
+
+**Did it help? No.** tiered_kv is 15 points below tiered and 12.5 below Lexico on flexible accuracy
+(neither difference is significant at n = 40: p = 0.07 and 0.30). It is also the lowest of the
+three compressed methods. Tiering the values as well as the keys (plain TieredKV) is the better
+of our two variants.
+
+`tiered_evict` (evict the light tier instead of compressing it) was not run, for lack of time.
