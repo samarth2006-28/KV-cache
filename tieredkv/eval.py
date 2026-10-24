@@ -206,7 +206,8 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
                                     "decoded_bytes": cache.decoded_bytes(),
                                     "prompt_sha256":hashlib.sha256(gsm8k.build_prompt(p["question"],shots).encode()).hexdigest(),
                                     "budget_eligible":problem_audits[-1]["eligible"]}) + "\n")
-                print(f"[{tag}] {i + 1}/{n} strict={strict / (i + 1):.3f} "
+                f.flush()   # an interrupted run keeps every finished problem (compare.py reads them)
+                print(f"[{tag}] {i + 1}/{n} strict={strict / (i + 1):.3f} flex={flex / (i + 1):.3f} "
                       f"budget={budgets[-1]:.3f} {dt:.1f}s", flush=True)
     finally:
         if tracker is not None:
