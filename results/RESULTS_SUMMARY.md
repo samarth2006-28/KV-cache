@@ -6,17 +6,35 @@ transformers 4.49.0. Models are the ungated `unsloth/` copies of Meta's Llama-3.
 Memory = retained dense + CSR bytes / full fp16 KV. `eligible=False` = runner's per-problem
 or aggregate budget audit failed (any problem more than 1 point from the target).
 
-## 3B, the main model (`unsloth/Llama-3.2-3B-Instruct`, revision 006f5dcd13)
+## Final 3B matrix: 20% memory, n = 40 (`results/final/`)
+
+`unsloth/Llama-3.2-3B-Instruct` rev 006f5dcd13, seed 0, max_new_tokens 192, 3B dictionary
+(N = 4096). All four cells ran the same core code (c-eval 8345d31; the recorded fd96000 / 84997f0
+only add plot/compare/results files).
+
+| Method | Measured memory | Flexible | Strict | % of full kept (flexible) | s/problem | tok/s | Eligible |
+|---|---|---|---|---|---|---|---|
+| Full KV | 100% | **67.5%** (27/40) | 57.5% | 100% | 5.53 | 20.14 | True |
+| Lexico | 20.55% | **32.5%** (13/40) | 20.0% | 48% | 25.06 | 3.84 | False (8/40 problems > 21%) |
+| TieredKV | 20.50% | **35.0%** (14/40) | 0.0% | 52% | 48.90 | 1.91 | False (3/40 problems > 21%) |
+| H₂O | 20.04% | **10.0%** (4/40) | 5.0% | 15% | 9.96 | 11.84 | True |
+
+Paired McNemar (`mcnemar.md`, flexible): tiered vs lexico p = 1.0 (9 vs 8 discordant: no
+significant difference); tiered vs h2o p = 0.002; lexico vs h2o p = 0.035. Strict: lexico beats
+tiered (p = 0.008) because tiered never writes `#### N` (always "The answer is N").
+Plot: `final/plots/acc_vs_budget.png` (flexible, hollow = budget audit failed).
+
+## Earlier 3B runs
 
 | Folder | Code | Cell | n | max_new | Strict | Flexible | Measured | s/problem | tok/s | Eligible |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `final/` | fd96000 (= c-eval 8345d31 code + plot/compare only) | lexico 20% | 40 | 192 | 20.0% | **32.5%** | 20.55% | 25.06 | 3.84 | False (8/40 problems over) |
-| `final/` | fd96000 | tiered 20% | 40 | 192 | — | — | — | — | — | **Crashed: stopped by hand at 34/40, no output** |
+| `final/` | fd96000 | tiered 20% (1st attempt) | 40 | 192 | — | — | — | — | — | **Stopped by hand at 34/40, no output; rerun above** |
 | `3b_timing/` | 8345d31 | lexico 20% | 5 | 256 | 0% | 0% | 21.07% | 20.36 | 3.86 | False (2/5 over) |
 | `3b_timing/` | 8345d31 | tiered 20% | 5 | 256 | 0% | **80%** | 20.61% | 36.16 | 2.31 | True |
 | `smoke_Llama-3.2-3B-Instruct.csv` | 69ae372 | full | 10 | 256 | 50% | 60% | 100% | 5.33 | 13.11 | n/a (pre-audit) |
 
-Full (n = 40), h2o 20% and the 25% cells were queued after tiered 20% and never ran.
+The 25% cells never ran.
 
 ## 1B checks (`unsloth/Llama-3.2-1B-Instruct`)
 

@@ -1,0 +1,424 @@
+{
+  "run_id": "2f029bf74fed4499a7ae935558fb2d8c",
+  "method": "tiered",
+  "cfg": {
+    "dictionary": "dicts/llama32_3b_N4096_s16.pt"
+  },
+  "model": "unsloth/Llama-3.2-3B-Instruct",
+  "model_revision": "006f5dcd1393c3add266de40994ba96225e9689d",
+  "dtype": "torch.float16",
+  "seed": 0,
+  "n": 40,
+  "max_new_tokens": 192,
+  "score_mode": "mean",
+  "test_indices": [
+    23,
+    120,
+    175,
+    192,
+    197,
+    204,
+    265,
+    350,
+    446,
+    474,
+    480,
+    543,
+    554,
+    590,
+    605,
+    620,
+    625,
+    712,
+    789,
+    799,
+    867,
+    883,
+    934,
+    950,
+    952,
+    991,
+    1020,
+    1052,
+    1062,
+    1070,
+    1083,
+    1101,
+    1110,
+    1126,
+    1137,
+    1161,
+    1226,
+    1234,
+    1257,
+    1302
+  ],
+  "shot_indices": [
+    797,
+    3169,
+    5780,
+    6203,
+    6526
+  ],
+  "budget_target": 0.2,
+  "aggregate_audit": {
+    "csv_line": 2,
+    "method": "tiered",
+    "eligible": true,
+    "difference_pp": 0.49999999999999767,
+    "reason": ""
+  },
+  "problem_audits": [
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.9156366604477606,
+      "reason": "",
+      "problem_idx": 23
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.20239465297450243,
+      "reason": "",
+      "problem_idx": 120
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.24478552476414894,
+      "reason": "",
+      "problem_idx": 175
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.227094534050179,
+      "reason": "",
+      "problem_idx": 192
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.6751828937861248,
+      "reason": "",
+      "problem_idx": 197
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.19867381029986808,
+      "reason": "",
+      "problem_idx": 204
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.37606179862842704,
+      "reason": "",
+      "problem_idx": 265
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.7678931451612886,
+      "reason": "",
+      "problem_idx": 350
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.7659995719178081,
+      "reason": "",
+      "problem_idx": 446
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.2943840579710144,
+      "reason": "",
+      "problem_idx": 474
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": false,
+      "difference_pp": 1.1196986607142856,
+      "reason": "measured budget outside tolerance",
+      "problem_idx": 480
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.6434917717086819,
+      "reason": "",
+      "problem_idx": 543
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.25662991656734135,
+      "reason": "",
+      "problem_idx": 554
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.033262611040610346,
+      "reason": "",
+      "problem_idx": 590
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.32055412371133907,
+      "reason": "",
+      "problem_idx": 605
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.9567561619718307,
+      "reason": "",
+      "problem_idx": 620
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.326349945730825,
+      "reason": "",
+      "problem_idx": 625
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.027977195945944056,
+      "reason": "",
+      "problem_idx": 712
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.5869791666666652,
+      "reason": "",
+      "problem_idx": 789
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.3202681107954547,
+      "reason": "",
+      "problem_idx": 799
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.41516059663250227,
+      "reason": "",
+      "problem_idx": 867
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": false,
+      "difference_pp": 1.0136499297752788,
+      "reason": "measured budget outside tolerance",
+      "problem_idx": 883
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.3197041495901637,
+      "reason": "",
+      "problem_idx": 934
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.5766129032258066,
+      "reason": "",
+      "problem_idx": 950
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.872414095371668,
+      "reason": "",
+      "problem_idx": 952
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.2950658958602831,
+      "reason": "",
+      "problem_idx": 991
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.6886046829446046,
+      "reason": "",
+      "problem_idx": 1020
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.5264397791023834,
+      "reason": "",
+      "problem_idx": 1052
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.8166848923283981,
+      "reason": "",
+      "problem_idx": 1062
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.17722616390306034,
+      "reason": "",
+      "problem_idx": 1070
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.14756352319235944,
+      "reason": "",
+      "problem_idx": 1083
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.5187724820143874,
+      "reason": "",
+      "problem_idx": 1101
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.22947517421602615,
+      "reason": "",
+      "problem_idx": 1110
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": false,
+      "difference_pp": 1.001526836661912,
+      "reason": "measured budget outside tolerance",
+      "problem_idx": 1126
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.2040207006369421,
+      "reason": "",
+      "problem_idx": 1137
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.49030689820742657,
+      "reason": "",
+      "problem_idx": 1161
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.28912282818532586,
+      "reason": "",
+      "problem_idx": 1226
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.9878472222222212,
+      "reason": "",
+      "problem_idx": 1234
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.7934537005457015,
+      "reason": "",
+      "problem_idx": 1257
+    },
+    {
+      "csv_line": 2,
+      "method": "tiered",
+      "eligible": true,
+      "difference_pp": 0.42021112482369394,
+      "reason": "",
+      "problem_idx": 1302
+    }
+  ],
+  "eligible": false,
+  "git_sha": "84997f0",
+  "torch": "2.11.0+cu128",
+  "dictionary_note": "Dictionary must match this model; path is in cfg.",
+  "memory_denominator": "full fp16 KV, not the model dtype",
+  "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
+  "effective_cache": {
+    "window": 32,
+    "chunk": 8,
+    "tiers": [
+      0.05,
+      0.2
+    ],
+    "ratios": [
+      32,
+      12,
+      4
+    ],
+    "evict_light": false,
+    "budget_policy": "fixed"
+  },
+  "source_sha256": {
+    "eval.py": "85a17ac7dd9dbbc01675a9f5bc7d3c4a37c9f67d133468bbc343aeadd4101d65",
+    "cache.py": "212f29cfa267641b01a449e5f16b33323eb4e67b7b1d7a5c7fa5cfc3977c1496",
+    "allocator.py": "00e9716db7b60f5f0a1b2da6cb23d3ddaa1e559661ec9ffe22093b71ac14b4ca",
+    "compress.py": "05888af14dc8c02eadbac79dde9bab16f63844b9401b890d515ac9cbf864bcfd",
+    "gsm8k.py": "db945ad6373612300b9bebf221c8a0a3d0ed2736548b52b7dd813b4e9f1b07d2",
+    "profile.py": "32565f844a1a777b5b1e53e4d8a541b09cde912b5fcee2a774bb7e70eda7e5f8"
+  },
+  "dictionary_sha256": "bbe103e6469f86733afb1c7670feb272eb63466ad370bf00e9645f1287d34805",
+  "limitations": "Budget audit is not a statistical accuracy or speedup test."
+}
