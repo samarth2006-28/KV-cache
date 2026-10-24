@@ -14,6 +14,7 @@ Output: tensor [2*n_layers, head_dim, N] fp16, D[2l] = layer l keys, D[2l+1] = v
 """
 import argparse
 import json
+import os
 import time
 
 import torch
@@ -132,6 +133,7 @@ def main():
     print(f"collected KV buffer {tuple(buf.shape)}")
 
     D, log = train(buf, a.N, a.s, a.minutes, batch=a.batch, lr=a.lr, device="cuda")
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     torch.save(D, a.out)
     log.update(vars(a))
     with open(a.out.rsplit(".", 1)[0] + ".json", "w") as f:
