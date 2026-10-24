@@ -13,7 +13,9 @@ Lexico gives every token the same number of dictionary atoms `s`. TieredKV uses 
 | `tieredkv/train_dict.py` | Samarth | Trains Lexico-format dictionaries within a time limit (Lexico doesn't release any) |
 | `tieredkv/gsm8k.py` | Samarth | Fixed subset, 5-shot prompt (same format as lm-eval), strict/flexible scoring, Wilson CI, McNemar |
 | `plot.py` | Samarth | `results/results.csv` → accuracy-vs-memory plot, ablation plot, markdown table |
-| `tieredkv/cache.py` | Vishal | `TieredKVCache(method)` for `generate()`: dense recent window + compressed old tokens, byte accounting (`kv_bytes`, `measured_budget`). Phase 1: `method="full"` only |
+| `tieredkv/cache.py` | Vishal | `TieredKVCache(method)` for `generate()`: dense recent window + compressed old tokens, byte accounting (`kv_bytes`, `measured_budget`). `full` / `lexico` / `tiered` / `h2o`: compresses (or evicts) everything but the last W tokens once recent exceeds W + C |
+| `tieredkv/profile.py` | Vishal | `DecodeTimer` (decode-only tok/s, ms/token), peak GPU memory |
+| `notebooks/colab_gpu_runs.ipynb` | Vishal | Colab GPU run book: plan test 1, full baseline, dictionary, lexico / tiered / h2o at 20%, audit, plot |
 | `tieredkv/eval.py` | Vishal | `run(method, budget, task, n, seed)`: fixed GSM8K subset, greedy 256 tokens, appends one row to `results/results.csv`, per-problem preds to `results/runs/*.jsonl` |
 
 ## Setup
@@ -29,13 +31,14 @@ python -m pytest -q tests/
 # full-cache upper bound (plan test 1 on the real model first)
 TIEREDKV_MODEL=meta-llama/Llama-3.1-8B-Instruct python -m pytest -q tests/test_integration.py
 python -m tieredkv.eval --method full --budget 1.0 --task gsm8k --n 50
+python -m tieredkv.eval --method tiered --budget 0.2 --n 50 --dictionary dicts/llama31_8b_N4096_s16.pt
 ```
 
 The run prints seconds per problem (also the `s_prob` column). Size n with `n = GPU-seconds / (20 × s_prob)`.
 
 Method names: `full`, `lexico`, `h2o`, `tiered`, plus tiered ablations `tiered_hh3`, `tiered_hh10`, `tiered_24-8-2`, `tiered_evict` (suffixes combine, e.g. `tiered_hh3_evict`). `plot.py` treats anything except the four main names as an ablation.
 
-Dense recent window: `W = 32` for every method (`cache.WINDOW`). Lexico's default of 128 makes the 10% and 15% budgets impossible on ~1000-token prompts.
+Dense recent window: `W = 32` for every method (`cache.WINDOW`). Lexico's default of 128 makes the 10% and 15% budgets impossible on ~1000-token prompts. Decode chunk `C = 8` (`cache.CHUNK`): recent swings between W and W + C dense tokens, so C = 32 would overshoot the measured budget by ~2.5 points.
 
 ## Train a dictionary (needed before any Lexico or tiered run)
 

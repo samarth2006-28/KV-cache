@@ -56,11 +56,11 @@ def test_full_logits_match_stock_tiny(tiny):
     assert torch.equal(la, lb)
 
 
-def test_unwired_methods_raise():
+def test_methods_need_their_inputs():
     with pytest.raises(ValueError):
         TieredKVCache("bogus")
-    for m in ("lexico", "h2o", "tiered"):
-        with pytest.raises(NotImplementedError):
+    for m in ("lexico", "h2o", "tiered"):      # tracker and/or dictionary missing
+        with pytest.raises(ValueError):
             TieredKVCache(m)
 
 
@@ -158,3 +158,48 @@ def test_runner_row_readable_by_plot(tiny, tmp_path, monkeypatch):
     (row,) = plot.load(csv_path)
     assert row["method"] == "full" and row["n"] == 3
     assert sum(1 for _ in open(out["cfg"]["preds"])) == 3
+
+
+@pytest.mark.parametrize("method,budget", [("lexico", 0.5), ("tiered", 0.5), ("h2o", 0.5),
+                                           ("tiered_hh3_evict", 0.5), ("tiered_24-8-2", 0.5)])
+def test_runner_every_method(tiny, tmp_path, monkeypatch, method, budget):
+    """eval.run with tracker + dictionary wiring, offline. Small W/C so short prompts compress."""
+    import string
+    from tokenizers import Tokenizer, decoders, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+    from tieredkv import compress as C, eval as ev, gsm8k
+    vocab = {"<unk>": 0, **{c: i + 1 for i, c in enumerate(string.printable[:255])}}
+    t = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
+    t.pre_tokenizer, t.decoder = pre_tokenizers.Split("", "isolated"), decoders.Fuse()
+    tok = PreTrainedTokenizerFast(tokenizer_object=t, unk_token="<unk>", eos_token="<unk>")
+    probs = [{"idx": i, "question": f"What is {i} plus one?", "answer": f"#### {i + 1}",
+              "target": str(i + 1)} for i in range(2)]
+    monkeypatch.setitem(ev._loaded, "tiny", (tiny, tok))
+    monkeypatch.setattr(gsm8k, "load_subset", lambda n, seed=0, split="test": probs[:n])
+    monkeypatch.setattr(gsm8k, "fewshot", lambda k=5, seed=1234: probs[:1])
+    D = torch.nn.functional.normalize(torch.randn(6, 16, 64, generator=torch.Generator().manual_seed(0)), dim=1)
+    torch.save(D, tmp_path / "dict.pt")
+    cfg = {"dictionary": str(tmp_path / "dict.pt"), "window": 4, "chunk": 2}
+    try:
+        out = ev.run(method, budget, "gsm8k", 2, model_name="tiny", cfg=cfg,
+                     results=str(tmp_path / "r.csv"), max_new_tokens=12)
+    finally:
+        C.configure(n_kv_heads=8, head_dim=128)
+    row = out["cfg"]
+    assert row["method"] == method and 0 < row["budget_measured"] < 2.0   # fp32 tiny: full = 2.0
+    assert row["ms_tok"] > 0 and row["tok_s"] > 0
+    assert not tiny.model.layers[0].self_attn._forward_hooks              # tracker removed
+
+
+def test_runner_needs_dictionary():
+    from tieredkv import eval as ev
+    with pytest.raises(ValueError, match="dictionary"):
+        ev.run("lexico", 0.2, "gsm8k", 1)
+
+
+def test_results_header_mismatch_refused(tmp_path):
+    from tieredkv import eval as ev
+    p = tmp_path / "old.csv"
+    p.write_text("method,acc\nfull,0.5\n")
+    with pytest.raises(ValueError, match="columns"):
+        ev.append_row({"method": "full"}, str(p))
