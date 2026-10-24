@@ -179,7 +179,7 @@ def test_runner_every_method(tiny, tmp_path, monkeypatch, method, budget):
     monkeypatch.setattr(gsm8k, "fewshot", lambda k=5, seed=1234: probs[:1])
     D = torch.nn.functional.normalize(torch.randn(6, 16, 64, generator=torch.Generator().manual_seed(0)), dim=1)
     torch.save(D, tmp_path / "dict.pt")
-    cfg = {"dictionary": str(tmp_path / "dict.pt"), "window": 4, "chunk": 2}
+    cfg = {"dictionary": str(tmp_path / "dict.pt"), "window": 4, "chunk": 2, "expected_new_tokens": 10}
     try:
         out = ev.run(method, budget, "gsm8k", 2, model_name="tiny", cfg=cfg,
                      results=str(tmp_path / "r.csv"), max_new_tokens=12)
@@ -189,6 +189,10 @@ def test_runner_every_method(tiny, tmp_path, monkeypatch, method, budget):
     assert row["method"] == method and 0 < row["budget_measured"] < 2.0   # fp32 tiny: full = 2.0
     assert row["ms_tok"] > 0 and row["tok_s"] > 0
     assert not tiny.model.layers[0].self_attn._forward_hooks              # tracker removed
+    import json
+    rec = json.loads(open(row["preds"]).readline())
+    assert rec["new_tokens"] >= 1 and rec["kv_bytes"] > 0
+    assert (rec["decoded_bytes"] > 0) == (method != "h2o")     # dense copy only for compressed methods
 
 
 def test_runner_needs_dictionary():

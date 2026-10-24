@@ -29,9 +29,9 @@ python -m pytest -q tests/
 
 ```bash
 # full-cache upper bound (plan test 1 on the real model first)
-TIEREDKV_MODEL=meta-llama/Llama-3.1-8B-Instruct python -m pytest -q tests/test_integration.py
+TIEREDKV_MODEL=unsloth/Llama-3.2-3B-Instruct python -m pytest -q tests/test_integration.py
 python -m tieredkv.eval --method full --budget 1.0 --task gsm8k --n 50
-python -m tieredkv.eval --method tiered --budget 0.2 --n 50 --dictionary dicts/llama31_8b_N4096_s16.pt
+python -m tieredkv.eval --method tiered --budget 0.2 --n 50 --dictionary dicts/llama32_3b_N4096_s16.pt
 ```
 
 The run prints seconds per problem (also the `s_prob` column). Size n with `n = GPU-seconds / (20 × s_prob)`.

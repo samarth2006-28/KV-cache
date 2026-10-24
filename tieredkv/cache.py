@@ -13,7 +13,7 @@ prompt at once; decode: C tokens every C steps). Starting there guarantees the t
 scores for every stored token, since its hook writes them after attention.
 
     full     store everything dense (== DynamicCache)
-    lexico   every compressed token gets the same s = avg_s
+    lexico   every compressed token gets floor(avg_s) or floor(avg_s) + 1 (uniform)
     tiered   s per token from allocator.allocate on H2O scores (same bytes as lexico)
     h2o      nothing compressed; keep recent W + top-score tokens, evict the rest
 

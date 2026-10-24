@@ -92,7 +92,8 @@ def make_cache(method, budget, cfg, tracker=None, max_new_tokens=MAX_NEW_TOKENS)
     kw = {k: cfg[k] for k in ("tiers", "ratios", "evict_light", "avg_s", "budget_policy") if k in cfg}
     return TieredKVCache(base, budget=budget, window=cfg.get("window", WINDOW),
                          chunk=cfg.get("chunk", CHUNK), dictionary_path=cfg.get("dictionary"),
-                         tracker=tracker, expected_new_tokens=max_new_tokens, **{**variant, **kw})
+                         tracker=tracker, expected_new_tokens=cfg.get("expected_new_tokens", max_new_tokens),
+                         **{**variant, **kw})
 
 
 def _git_sha():
@@ -201,6 +202,8 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
                 f.write(json.dumps({"idx": p["idx"], "strict": r["strict"], "flexible": r["flexible"],
                                     "pred": r["pred"], "target": p["target"], "text": text,
                                     "budget_measured": budgets[-1], "avg_s": cache.avg_s,
+                                    "new_tokens": timer.new_tokens, "kv_bytes": kv_bytes[-1],
+                                    "decoded_bytes": cache.decoded_bytes(),
                                     "prompt_sha256":hashlib.sha256(gsm8k.build_prompt(p["question"],shots).encode()).hexdigest(),
                                     "budget_eligible":problem_audits[-1]["eligible"]}) + "\n")
                 print(f"[{tag}] {i + 1}/{n} strict={strict / (i + 1):.3f} "
@@ -234,7 +237,9 @@ def run(method: str, budget: float, task: str, n: int, seed: int = 0, *, model_n
                 "dataset_revision":gsm8k.DATASET_REVISION,
                 "effective_cache":{"window":cache.window,"chunk":cache.chunk,
                                    "tiers":cache.tiers,"ratios":cache.ratios,
-                                   "evict_light":cache.evict_light,"budget_policy":cache.budget_policy},
+                                   "evict_light":cache.evict_light,"budget_policy":cache.budget_policy,
+                                   "expected_new_tokens":cache.expected_new_tokens,
+                                   "cache_decoded":cache.cache_decoded},
                 "source_sha256":{name:_file_sha256(Path(__file__).parent/name) for name in
                     ("eval.py","cache.py","allocator.py","compress.py","gsm8k.py","profile.py")},
                 "dictionary_sha256":_file_sha256(cfg["dictionary"]) if cfg.get("dictionary") else None,
@@ -266,6 +271,9 @@ def main():
     ap.add_argument("--dictionary", default=None, help="dictionary .pt (lexico / tiered)")
     ap.add_argument("--window", type=int)
     ap.add_argument("--chunk", type=int)
+    ap.add_argument("--expected-new-tokens", type=int,
+                    help="answer length the budget is planned for (default max-new-tokens); "
+                         "set it to the full-cache run's mean new_tokens")
     ap.add_argument("--results", default=RESULTS)
     ap.add_argument("--max-new-tokens", type=int, default=MAX_NEW_TOKENS)
     a = ap.parse_args()
@@ -276,7 +284,7 @@ def main():
     cfg = dict(descriptor.get("cfg",{}))
     if "score_mode" in descriptor:
         cfg["score_mode"] = descriptor["score_mode"]
-    for key in ("dictionary","window","chunk"):
+    for key in ("dictionary","window","chunk","expected_new_tokens"):
         if getattr(a,key) is not None:
             cfg[key] = getattr(a,key)
     def setting(key, default):
