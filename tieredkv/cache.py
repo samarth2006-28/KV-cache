@@ -129,6 +129,7 @@ class TieredKVCache(Cache):
         #                      "dk" / "dv": decoded copy [1, h, n, d] (decode_once only)}
         self.sparse: List[Optional[Dict[str, Any]]] = []
         self._layer_dicts: Dict[int, Tuple[Any, Any]] = {}
+        self._atom_carry: Dict[int, float] = {}     # lexico: fractional atoms owed per layer
         self._seen_tokens = 0
 
     # ------------------------------------------------------------------ Cache API
@@ -198,13 +199,38 @@ class TieredKVCache(Cache):
         return self._layer_dicts[layer_idx]
 
     def _resolve_avg_s(self, recent, seen_before):
-        """Uniform s that hits the budget, set once and shared by lexico and tiered."""
+        """Average atoms per token that hits the budget, set once and shared by lexico and tiered.
+
+        Fractional, unlike compress.solve_s (same formula, without the floor): an integer s
+        undershoots the budget by up to one atom's bytes (~1.2 points at 8 heads x 128 dims).
+        lexico realises it as a mix of floor(s) and floor(s) + 1; allocate matches its bytes.
+        """
         if self.avg_s is None:
             compress.configure(n_kv_heads=recent.shape[1], head_dim=recent.shape[-1])
             n_total = seen_before + self.expected_new_tokens
-            # Recent averages W + C/2 dense tokens over generation, not W.
-            self.avg_s = compress.solve_s(self.budget, n_total, self.window + self.chunk // 2)
+            # After each update recent holds W+1 .. W+C dense tokens: (C+1)/2 extra on average.
+            dense = self.window + (self.chunk + 1) / 2
+            if n_total <= dense:
+                raise ValueError(f"N={n_total} <= dense window {dense}: nothing to compress")
+            full = compress.full_bytes_per_token()
+            per_token = (self.budget * n_total - dense) * full / (n_total - dense)
+            s = ((per_token / (2 * recent.shape[1]) - compress.INDPTR_BYTES)
+                 / (compress.IDX_BYTES + compress.COEF_BYTES))
+            if s < 1:
+                raise ValueError(f"budget {self.budget:.1%} infeasible at N={n_total}: the dense "
+                                 f"window alone is {dense / n_total:.1%}")
+            self.avg_s = s
         return self.avg_s
+
+    def _uniform_s(self, layer_idx, n, avg_s, device):
+        """lexico: n tokens at avg_s on average, as floor / floor + 1. The fractional remainder
+        carries over to the next chunk, so the layer's total atoms track avg_s * tokens."""
+        ideal = self._atom_carry.get(layer_idx, 0.0) + avg_s * n
+        total = int(ideal + 1e-9)
+        self._atom_carry[layer_idx] = ideal - total
+        s = torch.full((n,), total // n, dtype=torch.long, device=device)
+        s[:total % n] += 1
+        return s
 
     def _check_tracker(self, layer_idx, n_stored):
         n = self.tracker.acc[layer_idx].shape[-1] if layer_idx in self.tracker.acc else 0
@@ -257,7 +283,7 @@ class TieredKVCache(Cache):
             avg_s = self._resolve_avg_s(recent_k, seen_before)
 
         if self.method == "lexico":
-            s = torch.full((n_old,), avg_s, dtype=torch.long, device=recent_k.device)
+            s = self._uniform_s(layer_idx, n_old, avg_s, recent_k.device)
         else:
             self._check_tracker(layer_idx, first + n_rec)
             scores = self.tracker.scores(layer_idx)[0, first:first + n_old]

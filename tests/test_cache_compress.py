@@ -175,7 +175,33 @@ def test_real_encoder_hits_budget(tiny, dictionary, method):
     full = C.full_bytes_per_token() * len(cache) * n_seen
     measured = (sparse + C.full_bytes_per_token() * len(cache) * n_dense) / full
     assert measured == pytest.approx(budget, abs=0.03)
-    assert cache.avg_s == C.solve_s(budget, PROMPT + NEW - 1, W + CH // 2)
+    assert C.solve_s(budget, PROMPT + NEW - 1, W + CH // 2) <= cache.avg_s   # fractional, not floored
+
+
+def _lexico_sim(budget, prompt, new, expected=256, heads=8, dim=128, layers=1):
+    """Drive the cache directly with fp16 K/V shaped like Llama-3.2-3B (8 kv heads x 128)."""
+    g = torch.Generator().manual_seed(0)
+    D = torch.nn.functional.normalize(torch.randn(2 * layers, dim, 4096, generator=g), dim=1)
+    c = TieredKVCache("lexico", dictionary=D, budget=budget, expected_new_tokens=expected)
+    for i in range(new):
+        n = prompt if i == 0 else 1
+        for layer in range(layers):
+            kv = torch.randn(2, 1, heads, n, dim, generator=g).half()
+            c.update(kv[0], kv[1], layer)
+    return c
+
+
+@pytest.mark.parametrize("budget,prompt,new", [(0.10, 1000, 150), (0.15, 1000, 150),
+                                               (0.20, 1000, 150), (0.25, 1000, 150),
+                                               (0.20, 640, 60), (0.20, 640, 256)])
+def test_lexico_measured_budget_within_audit(budget, prompt, new):
+    """Realistic GSM8K shapes: measured memory within the 1-point audit at every budget.
+    An integer s undershot by up to ~1.2 points; floor / floor + 1 atoms close that gap."""
+    c = _lexico_sim(budget, prompt, new)
+    assert abs(c.measured_budget() - budget) < 0.01
+    s = c.token_s(0)
+    assert s.max() - s.min() <= 1                                   # still uniform: s or s + 1
+    assert s.float().mean().item() == pytest.approx(c.avg_s, abs=0.01)
 
 
 @pytest.mark.parametrize("method", ["lexico", "tiered"])
