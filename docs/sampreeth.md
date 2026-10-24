@@ -81,6 +81,10 @@ eviction/count alignment, chunked prefill, detached/defensive scores, hook clean
 strict and repeated H2O selection, budget-audit CLI behavior and real tiny Llama
 greedy-generation equivalence in sum and mean modes.
 
-Tiny Llama tests use random weights and check compatibility only. Actual trained
-model scores, H2O matrix runs, threshold ablations and CUDA/memory performance
+Tiny Llama tests use random weights and check compatibility only. Scores on the
+team's target model, H2O matrix runs, threshold ablations and CUDA/memory performance
 remain pending dictionary availability and the shared cache/runner integration.
+
+Phase 2 adds a completed small pretrained-model scoring diagnostic; see
+`phase2_scoring_diagnostics.md` for the exact model/corpus, findings and caveats.
+Target-model scores and compressed-generation task benchmarks remain pending.
