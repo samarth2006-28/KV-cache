@@ -46,11 +46,13 @@ __all__ = ["TieredKVCache", "METHODS", "WINDOW", "CHUNK"]
 METHODS = ("full", "lexico", "h2o", "tiered")
 
 # Dense recent window W, one constant for every method. 128 (Lexico's default) makes 10% and
-# 15% infeasible on ~1000-token 5-shot GSM8K prompts: the window alone is ~13%. At W=32,
-# compress.solve_s gives s = 4 / 9 / 13 / 17 at 10 / 15 / 20 / 25% for N=1000.
+# 15% infeasible on ~1000-token 5-shot GSM8K prompts: the window alone is ~13%. At W=32 the
+# average atoms per compressed token is ~4.3 / 8.7 / 13.2 / 17.6 at 10 / 15 / 20 / 25% (N=1000,
+# _resolve_avg_s, which also counts the C/2 average dense chunk; compress.solve_s, with W only and
+# floored, gives 4 / 9 / 13 / 17).
 WINDOW = 32
-# Tokens compressed together during decode. Recent swings between W and W + C, so C adds up to
-# C/N to the measured budget; 8 keeps that under 1 point (the audit tolerance) at N ~ 1000.
+# Tokens compressed together during decode. Recent swings between W + 1 and W + C, so C adds up
+# to C/N to the measured budget; 8 keeps that under 1 point (the audit tolerance) at N ~ 1000.
 CHUNK = 8
 
 _DICTS = {}

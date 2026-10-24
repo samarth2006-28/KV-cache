@@ -48,6 +48,10 @@ COLUMNS = ["method", "budget_target", "budget_measured", "acc", "acc_flex", "kv_
            "tok_s", "ms_tok", "s_prob", "n", "seed", "task", "model", "git_sha",
            "run_id", "eligible"]
 MAX_NEW_TOKENS = 256
+# Answer length the fixed budget is planned for. Llama-3.2-3B's 5-shot GSM8K answers are short
+# (median ~55 tokens, 21-207 over 40 problems); planning for max_new_tokens put short answers
+# >1 point over budget on ~640-token prompts. At 64 every answer length stays within 1 point.
+EXPECTED_NEW_TOKENS = 64
 N_SHOT = 5
 TRACKER_MODE = {"h2o": "sum", "tiered": "mean"}
 
@@ -92,7 +96,8 @@ def make_cache(method, budget, cfg, tracker=None, max_new_tokens=MAX_NEW_TOKENS)
     kw = {k: cfg[k] for k in ("tiers", "ratios", "evict_light", "avg_s", "budget_policy") if k in cfg}
     return TieredKVCache(base, budget=budget, window=cfg.get("window", WINDOW),
                          chunk=cfg.get("chunk", CHUNK), dictionary_path=cfg.get("dictionary"),
-                         tracker=tracker, expected_new_tokens=cfg.get("expected_new_tokens", max_new_tokens),
+                         tracker=tracker, expected_new_tokens=cfg.get("expected_new_tokens",
+                                                     min(EXPECTED_NEW_TOKENS, max_new_tokens)),
                          **{**variant, **kw})
 
 
@@ -273,8 +278,8 @@ def main():
     ap.add_argument("--window", type=int)
     ap.add_argument("--chunk", type=int)
     ap.add_argument("--expected-new-tokens", type=int,
-                    help="answer length the budget is planned for (default max-new-tokens); "
-                         "set it to the full-cache run's mean new_tokens")
+                    help=f"answer length the budget is planned for (default {EXPECTED_NEW_TOKENS}, "
+                         "capped at --max-new-tokens); the full-cache run's mean new_tokens is a good value")
     ap.add_argument("--results", default=RESULTS)
     ap.add_argument("--max-new-tokens", type=int, default=MAX_NEW_TOKENS)
     a = ap.parse_args()

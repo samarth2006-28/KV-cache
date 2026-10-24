@@ -17,6 +17,13 @@ Lexico gives every token the same number of dictionary atoms `s`. TieredKV uses 
 | `tieredkv/profile.py` | Vishal | `DecodeTimer` (decode-only tok/s, ms/token), peak GPU memory |
 | `notebooks/colab_gpu_runs.ipynb` | Vishal | Colab GPU run book: plan test 1, full baseline, dictionary, lexico / tiered / h2o at 20%, audit, plot |
 | `tieredkv/eval.py` | Vishal | `run(method, budget, task, n, seed)`: fixed GSM8K subset, greedy 256 tokens, appends one row to `results/results.csv`, per-problem preds to `results/runs/*.jsonl` |
+| `scripts/run_matrix.sh` | Vishal | Whole GSM8K matrix into one CSV (resumes: finished cells are skipped), then audit, tiered-vs-lexico/h2o McNemar and plot |
+| `tieredkv/hit_rate.py` | Vishal | Heavy-hitter hit rate: do tokens ranked important from prompt attention get the attention during generation? Also attention H2O loses by evicting |
+| `tieredkv/compare.py` | Samarth | Paired per-problem McNemar between two methods, strict and flexible |
+| `tieredkv/check_dict.py` | Samarth | Dictionary sanity check: error vs s, timing, attention-vs-error correlation, attention-weighted error |
+| `tieredkv/budget_audit.py` | Sampreeth | Flags any run (or problem) more than 1 point from its target memory |
+| `tieredkv/h2o_baseline.py`, `h2o_experiment.py` | Sampreeth | Independent H2O reference and its audited GPU matrix |
+| `tieredkv/threshold_ablation.py`, `phase4_experiment.py` | Sampreeth | Heavy-hitter threshold (3/5/10%) ablation |
 
 ## Setup
 
@@ -34,6 +41,15 @@ python -m tieredkv.eval --method full --budget 1.0 --task gsm8k --n 50
 python -m tieredkv.eval --method tiered --budget 0.2 --n 50 --dictionary dicts/llama32_3b_N4096_s16.pt
 ```
 
+Whole matrix (resumable), and the hit-rate diagnostic (~5 s per problem on 3B):
+
+```bash
+scripts/run_matrix.sh dicts/llama32_3b_N4096_s16.pt 40 results/main/results.csv
+python -m tieredkv.hit_rate --model unsloth/Llama-3.2-3B-Instruct --n 20
+```
+
+Headline accuracy for Llama-3.2-3B is flexible match (`plot.py --metric acc_flex`): it often answers "The answer is N" instead of "#### N".
+
 The run prints seconds per problem (also the `s_prob` column). Size n with `n = GPU-seconds / (20 × s_prob)`.
 
 Method names: `full`, `lexico`, `h2o`, `tiered`, plus tiered ablations `tiered_hh3`, `tiered_hh10`, `tiered_24-8-2`, `tiered_evict` (suffixes combine, e.g. `tiered_hh3_evict`). `plot.py` treats anything except the four main names as an ablation.
@@ -43,8 +59,8 @@ Dense recent window: `W = 32` for every method (`cache.WINDOW`). Lexico's defaul
 ## Train a dictionary (needed before any Lexico or tiered run)
 
 ```bash
-python -m tieredkv.train_dict --model meta-llama/Llama-3.1-8B-Instruct \
-    --out dicts/llama31_8b_N4096_s16.pt --minutes 45
+python -m tieredkv.train_dict --model unsloth/Llama-3.2-3B-Instruct \
+    --out dicts/llama32_3b_N4096_s16.pt --minutes 45
 ```
 
 This writes `[2*n_layers, head_dim, 4096]` fp16 tensors: `D[2l]` holds keys, `D[2l+1]` values. Load them with `compress.load_dictionary(path, layer)`. The script prints the relative reconstruction error before and after training. Share the `.pt` file through HF Hub or Drive, not git.
@@ -56,7 +72,7 @@ Each compressed token-head is stored as int16 atom ids + fp8 coefficients + one 
 - `bytes_per_token(s) = 2 · n_kv_heads · (3s + 4)`
 - `budget = (Σ bytes(s_i) + W · full) / (N · full)`
 
-For the Lexico baseline, `solve_s(budget, N, W)` gives the uniform `s`. Tiered runs use the same `s` as `avg_s`, so both methods use the same number of bytes.
+`solve_s(budget, N, W)` gives the largest whole uniform `s`. The cache uses the same formula without the floor (and with the average dense chunk, W + (C+1)/2): a fractional `avg_s` shared by both methods. Lexico stores floor(avg_s) or floor(avg_s) + 1 atoms per token; tiered's `allocate` matches the same bytes. Both plan for `--expected-new-tokens` (default 64) generated tokens.
 
 ## Integrated validation and threshold runs
 
@@ -99,8 +115,9 @@ require --units percent. No eligible rows means no new comparison plot.
 
 Memory is actual retained dense+CSR payload divided by full **fp16** KV. A float32
 full cache therefore measures 200%, not 100%; CPU compatibility tests are not
-matched-memory benchmark rows. Dictionary weights, tracker metadata and temporary
-decoded tensors are not included in retained KV; peak GPU memory is separate.
+matched-memory benchmark rows. Dictionary weights, tracker metadata and the
+decoded copies are not included in retained KV: for speed the cache keeps each compressed chunk
+decoded (`cache_decoded=True`), reported per problem as `decoded_bytes`. Peak GPU memory is separate.
 Each CSR K/V chunk also has final pointer bytes beyond the per-token formula.
-Integer s, dense-window/chunk occupancy, early EOS and expected output length can
-cause target undershoot or overshoot. Audit actual results; do not relabel them.
+Dense-window/chunk occupancy, early EOS and the planned output length
+(`--expected-new-tokens`) can cause undershoot or overshoot. Audit actual results; do not relabel them.
