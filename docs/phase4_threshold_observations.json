@@ -1,0 +1,83 @@
+{
+  "kind": "allocation_projection_only",
+  "task_accuracy_evaluated": false,
+  "generation_cache_evaluated": false,
+  "n_prompts": 20,
+  "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "model_revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "storage_projection": "shared fp16/CSR formula",
+  "shape": {
+    "kv_heads": 3,
+    "head_dim": 64
+  },
+  "seed": 0,
+  "window": 32,
+  "score_mode": "mean",
+  "methods": {
+    "tiered_hh3": {
+      "records": 600,
+      "mean_projected_fraction": 0.18483550409486255,
+      "target_audit_passed": 0,
+      "target_audit_flagged": 600,
+      "max_old_byte_difference_fraction": 0.0,
+      "max_target_gap_pp": 1.7025110899873268
+    },
+    "tiered": {
+      "records": 600,
+      "mean_projected_fraction": 0.18483550409486255,
+      "target_audit_passed": 0,
+      "target_audit_flagged": 600,
+      "max_old_byte_difference_fraction": 0.0,
+      "max_target_gap_pp": 1.7025110899873268
+    },
+    "tiered_hh10": {
+      "records": 600,
+      "mean_projected_fraction": 0.18483550409486255,
+      "target_audit_passed": 0,
+      "target_audit_flagged": 600,
+      "max_old_byte_difference_fraction": 0.0,
+      "max_target_gap_pp": 1.7025110899873268
+    }
+  },
+  "limitations": [
+    "Prefill-only mean scores; not scores from compressed generation.",
+    "Projected formula storage, not measured SparseKV payload or process/GPU peak.",
+    "Shared formula excludes two final int32 CSR pointers (8 bytes/layer).",
+    "Integer uniform s can undershoot 20% by more than one percentage point.",
+    "No accuracy, reconstruction-error, speedup or best-threshold conclusion.",
+    "Target-model task ablation requires matching dictionary and shared compressed cache."
+  ],
+  "test_indices": [
+    120,
+    175,
+    192,
+    265,
+    350,
+    446,
+    474,
+    480,
+    554,
+    590,
+    799,
+    883,
+    991,
+    1020,
+    1062,
+    1070,
+    1101,
+    1234,
+    1257,
+    1302
+  ],
+  "train_shot_indices": [
+    797,
+    3169,
+    5780,
+    6203,
+    6526
+  ],
+  "input_token_range": [
+    724,
+    789
+  ]
+}

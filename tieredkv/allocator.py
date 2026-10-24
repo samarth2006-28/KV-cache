@@ -57,8 +57,8 @@ class ScoreTracker:
 
     mode="sum":  raw accumulated attention (faithful H2O; use for the H2O baseline).
     mode="mean": accumulated attention / number of queries that could see the key.
-                 Removes the causal bias toward old tokens (key j at prefill is seen by
-                 N - j queries, so "sum" mostly ranks by position). Recommended for allocate().
+                 Corrects unequal causal observation counts (key j at prefill is
+                 seen by N-j queries). Does not guarantee position-independent scores.
 
     Automatic hooks assume unpadded causal decoder attention. For padding, sliding
     windows or custom visibility, call add(..., valid_mask=mask) explicitly, with
@@ -192,7 +192,22 @@ def allocate(scores, avg_s, tiers=(0.05, 0.20), ratios=(32, 12, 4), evict_light=
     Returns LongTensor shaped like scores. Guarantees: s is non-increasing in score;
     equal ratios + integer avg_s -> every token gets exactly avg_s.
     """
+    if not math.isfinite(avg_s) or avg_s <= 0:
+        raise ValueError("avg_s must be finite and positive")
+    if (len(tiers) != 2 or any(not math.isfinite(x) or x < 0 for x in tiers)
+            or sum(tiers) > 1):
+        raise ValueError("tiers must be two nonnegative fractions with sum <= 1")
+    if len(ratios) != 3 or any(not math.isfinite(x) or x <= 0 for x in ratios):
+        raise ValueError("ratios must contain three finite positive values")
+    if (isinstance(s_min, bool) or not isinstance(s_min, int) or s_min < 1 or
+            (s_max is not None and (isinstance(s_max, bool) or
+             not isinstance(s_max, int) or s_max < s_min))):
+        raise ValueError("atom bounds must be positive integers with s_max >= s_min")
+    if not torch.isfinite(scores).all():
+        raise ValueError("scores must be finite")
     if scores.dim() == 2:
+        if scores.shape[0] == 0:
+            return torch.zeros_like(scores, dtype=torch.long)
         return torch.stack([allocate(r, avg_s, tiers, ratios, evict_light,
                                      bytes_fn=bytes_fn, s_min=s_min, s_max=s_max) for r in scores])
     if scores.dim() != 1:

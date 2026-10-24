@@ -8,9 +8,8 @@ Its public `ScoreTracker(model, mode=...)`, `add`, `scores`, `keep`, `reset`,
 The standalone starter is not copied wholesale into this repository.
 
 TieredKV uses `ScoreTracker(model, mode="mean")`; pure H2O uses `mode="sum"`.
-The shared requirements already pin Transformers 4.49.0. This contribution does
-not modify the encoder, dictionary trainer, answer scorer, plotting code, cache
-or evaluation runner.
+The shared requirements already pin Transformers 4.49.0. The later integrated review fixes cross-module defects and records them in
+integration_review.md; the earlier phase descriptions below are historical.
 
 ## Scoring contract
 
@@ -46,12 +45,12 @@ ceilings with fixed overhead, reserve that storage first and pass the resulting
 integer dense-token capacity instead. Cache position IDs/masks remain the
 integration owner's responsibility.
 
-The inspected c-eval branch uses W=32 and C=32, addressing the screenshot's
+The inspected c-eval branch uses W=32 (the integrated cache now uses C=8), addressing the screenshot's
 W=128/10% conflict. `configs/sampreeth.json` therefore retains four H2O targets
 (10/15/20/25%) at W=32. This supersedes the standalone starter's provisional
 decision to defer 10% with W=128. Actual feasibility must be checked per prompt.
 The threshold variants match c-eval's parser and plot grouping: `tiered_hh3`,
-`tiered` (5%) and `tiered_hh10`, all at 20%. No other branch is merged here.
+`tiered` (5%) and `tiered_hh10`, all at 20%. The later integration-review branch includes c-eval and the latest main.
 
 ## Diagnostics and evaluation support
 
@@ -81,6 +80,11 @@ eviction/count alignment, chunked prefill, detached/defensive scores, hook clean
 strict and repeated H2O selection, budget-audit CLI behavior and real tiny Llama
 greedy-generation equivalence in sum and mean modes.
 
-Tiny Llama tests use random weights and check compatibility only. Actual trained
-model scores, H2O matrix runs, threshold ablations and CUDA/memory performance
-remain pending dictionary availability and the shared cache/runner integration.
+Tiny Llama tests use random weights and check compatibility only. Scores on the
+team's target model, H2O matrix runs, threshold ablations and CUDA/memory performance
+remain pending target-model/dictionary validation. Shared integration is now present
+and exercised by the offline suite; see integration_review.md.
+
+Phase 2 adds a completed small pretrained-model scoring diagnostic; see
+`phase2_scoring_diagnostics.md` for the exact model/corpus, findings and caveats.
+Target-model scores and compressed-generation task benchmarks remain pending.

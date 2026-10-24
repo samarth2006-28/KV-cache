@@ -1,0 +1,166 @@
+{
+  "reference_only": true,
+  "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "model_revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "test_indices": [
+    120,
+    192,
+    474,
+    991,
+    1101
+  ],
+  "train_shot_indices": [
+    797,
+    3169,
+    5780,
+    6203,
+    6526
+  ],
+  "n": 5,
+  "seed": 0,
+  "window": 32,
+  "max_new_tokens": 64,
+  "dtype": "float32",
+  "device": "cpu",
+  "torch": "2.5.1+cpu",
+  "transformers": "4.49.0",
+  "source_sha256": {
+    "h2o_baseline.py": "833198add3ea6b7806caecbcc38cc31f29b28ea25100ddf3db3639bce26e54a0",
+    "h2o_reference_eval.py": "49335c1327a50825450336c5b0a53676641562b728a6a5416deb1190754bf3c2",
+    "allocator.py": "4ba1507b1c243a790412aaafaf5e00b7694b4c7795def15b2f8376bd92990761",
+    "gsm8k.py": "df0507b016ef43e0a763b533a78cc611cfa064b3998a341719f8762d17b1a21b"
+  },
+  "full_budget_stock_checks": [
+    {
+      "idx": 120,
+      "token_identical": true
+    },
+    {
+      "idx": 192,
+      "token_identical": true
+    },
+    {
+      "idx": 474,
+      "token_identical": true
+    },
+    {
+      "idx": 991,
+      "token_identical": true
+    },
+    {
+      "idx": 1101,
+      "token_identical": true
+    }
+  ],
+  "budget_audit": [
+    {
+      "csv_line": 2,
+      "method": "full_reference",
+      "eligible": true,
+      "difference_pp": 0.0,
+      "reason": ""
+    },
+    {
+      "csv_line": 3,
+      "method": "h2o_reference",
+      "eligible": true,
+      "difference_pp": 0.06604843046632419,
+      "reason": ""
+    },
+    {
+      "csv_line": 4,
+      "method": "h2o_reference",
+      "eligible": true,
+      "difference_pp": 0.07145056101101332,
+      "reason": ""
+    },
+    {
+      "csv_line": 5,
+      "method": "h2o_reference",
+      "eligible": true,
+      "difference_pp": 0.04502282036089045,
+      "reason": ""
+    },
+    {
+      "csv_line": 6,
+      "method": "h2o_reference",
+      "eligible": true,
+      "difference_pp": 0.037629122022911354,
+      "reason": ""
+    }
+  ],
+  "limitations": [
+    "Small-model, five-problem smoke matrix; not the team's target benchmark.",
+    "Full uncompressed prefill is materialized. Retained KV is not peak GPU/process memory.",
+    "KV budgets use the same float32 dtype in numerator/denominator; shared fp16/CSR results are not comparable.",
+    "Score/count/position metadata is reported separately from KV payload.",
+    "Greedy reference stops on EOS/token cap; scoring reuses shared stop-string truncation.",
+    "No claim about TieredKV versus Lexico, throughput gains or statistical superiority."
+  ],
+  "dataset": {
+    "dataset": "openai/gsm8k",
+    "revision": "740312add88f781978c0658806c59bc2815b9866",
+    "files": {
+      "train": {
+        "rows": 7473,
+        "sha256": "ea82612ea9582142387730c793eb67d3b12849002bc0b7fa6f8efafa7351419d"
+      },
+      "test": {
+        "rows": 1319,
+        "sha256": "ee7b8da9e381df27b9e3f7758a159ab2bdaa4dbaa910546cbbc47e0cb44e4f59"
+      }
+    }
+  },
+  "rows": [
+    {
+      "method": "full_reference",
+      "budget_target": 1.0,
+      "budget_measured": 1.0,
+      "acc": 0.0,
+      "acc_flex": 0.0,
+      "n": 5,
+      "dtype": "float32",
+      "reference_only": true
+    },
+    {
+      "method": "h2o_reference",
+      "budget_target": 0.1,
+      "budget_measured": 0.09933951569533676,
+      "acc": 0.0,
+      "acc_flex": 0.0,
+      "n": 5,
+      "dtype": "float32",
+      "reference_only": true
+    },
+    {
+      "method": "h2o_reference",
+      "budget_target": 0.15,
+      "budget_measured": 0.14928549438988986,
+      "acc": 0.0,
+      "acc_flex": 0.0,
+      "n": 5,
+      "dtype": "float32",
+      "reference_only": true
+    },
+    {
+      "method": "h2o_reference",
+      "budget_target": 0.2,
+      "budget_measured": 0.1995497717963911,
+      "acc": 0.0,
+      "acc_flex": 0.0,
+      "n": 5,
+      "dtype": "float32",
+      "reference_only": true
+    },
+    {
+      "method": "h2o_reference",
+      "budget_target": 0.25,
+      "budget_measured": 0.2496237087797709,
+      "acc": 0.0,
+      "acc_flex": 0.0,
+      "n": 5,
+      "dtype": "float32",
+      "reference_only": true
+    }
+  ]
+}

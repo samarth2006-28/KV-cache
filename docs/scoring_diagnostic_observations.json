@@ -1,0 +1,40 @@
+{
+  "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "diagnostic_only": true,
+  "prompt_count": 20,
+  "layers": 30,
+  "prompt_layer_records": 600,
+  "raw_top_attention_mass_share_mean": 0.6464256312100549,
+  "mean_top_score_share_mean": 0.48740315190780026,
+  "top_overlap_fraction_mean": 0.47402777777777777,
+  "realized_top_fraction_range": [
+    0.05,
+    0.06818181818181818
+  ],
+  "caveats": [
+    "Short diagnostic prompts, not GSM8K/LongBench or the team's target model.",
+    "Means describe prompt-layer records, not 600 independent prompts.",
+    "Mean-normalized score share is not raw attention probability mass.",
+    "Position correlation or ranking differences do not prove better task accuracy.",
+    "ceil(5% * token_count) makes realized top fractions exceed 5% on some short prompts."
+  ],
+  "prompt_sha256": "e449b7e56b78e61f1d03fa4a80e384dc9ea17dd8edf6163ff295baa97ef5649b",
+  "source_sha256": {
+    "allocator.py": "4ba1507b1c243a790412aaafaf5e00b7694b4c7795def15b2f8376bd92990761",
+    "score_diagnostics.py": "ea203a1cc2c33dddc11f1cceb2c79ee89eaa25d338e41ef6aee527d72faf5d87",
+    "sanity.py": "7d6d356258c41bc0e7b1cc74184fa40ccade05242a30736fb41b5d52235b4ffd"
+  },
+  "torch": "2.5.1+cpu",
+  "transformers": "4.49.0",
+  "device": "cpu",
+  "dtype": "torch.float32",
+  "max_input_tokens": 256,
+  "max_new_tokens": 8,
+  "chat_template": true,
+  "seed": 0,
+  "input_token_range": [
+    37,
+    54
+  ]
+}

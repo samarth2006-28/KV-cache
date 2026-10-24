@@ -1,0 +1,64 @@
+{
+  "kind": "pretrained_integration_compatibility_only",
+  "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "model_revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "dtype": "float32",
+  "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
+  "max_new_tokens": 8,
+  "checks": [
+    {
+      "idx": 120,
+      "input_tokens": 728,
+      "shared_full_matches_stock": true,
+      "shared_h2o100_matches_stock": true,
+      "shared_h2o20_matches_independent_reference": true,
+      "scores_aligned_after_eviction": true
+    },
+    {
+      "idx": 192,
+      "input_tokens": 745,
+      "shared_full_matches_stock": true,
+      "shared_h2o100_matches_stock": true,
+      "shared_h2o20_matches_independent_reference": true,
+      "scores_aligned_after_eviction": true
+    },
+    {
+      "idx": 474,
+      "input_tokens": 729,
+      "shared_full_matches_stock": true,
+      "shared_h2o100_matches_stock": true,
+      "shared_h2o20_matches_independent_reference": true,
+      "scores_aligned_after_eviction": true
+    },
+    {
+      "idx": 991,
+      "input_tokens": 753,
+      "shared_full_matches_stock": true,
+      "shared_h2o100_matches_stock": true,
+      "shared_h2o20_matches_independent_reference": true,
+      "scores_aligned_after_eviction": true
+    },
+    {
+      "idx": 1101,
+      "input_tokens": 734,
+      "shared_full_matches_stock": true,
+      "shared_h2o100_matches_stock": true,
+      "shared_h2o20_matches_independent_reference": true,
+      "scores_aligned_after_eviction": true
+    }
+  ],
+  "source_sha256": {
+    "allocator.py": "00e9716db7b60f5f0a1b2da6cb23d3ddaa1e559661ec9ffe22093b71ac14b4ca",
+    "cache.py": "3eb5087857c36425453ed75f823828fea98f458c0b3943cb97bc28cda4e277d2",
+    "compress.py": "05888af14dc8c02eadbac79dde9bab16f63844b9401b890d515ac9cbf864bcfd",
+    "gsm8k.py": "db945ad6373612300b9bebf221c8a0a3d0ed2736548b52b7dd813b4e9f1b07d2",
+    "h2o_baseline.py": "833198add3ea6b7806caecbcc38cc31f29b28ea25100ddf3db3639bce26e54a0"
+  },
+  "torch": "2.5.1+cpu",
+  "accuracy_evaluated": false,
+  "limitations": [
+    "Small model, 5 prompts, 8-token cap; no target-model quality or speedup claim.",
+    "Shared budget denominator is fp16, model float32; this is not a matched-budget benchmark.",
+    "Uniform/tiered encoding equivalence is covered by random tiny-model integration tests, not this pretrained run."
+  ]
+}

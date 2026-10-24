@@ -57,3 +57,42 @@ Each compressed token-head is stored as int16 atom ids + fp8 coefficients + one 
 - `budget = (Σ bytes(s_i) + W · full) / (N · full)`
 
 For the Lexico baseline, `solve_s(budget, N, W)` gives the uniform `s`. Tiered runs use the same `s` as `avg_s`, so both methods use the same number of bytes.
+
+## Integrated validation and threshold runs
+
+For the current Phase-4 GPU runner, use
+[notebooks/phase4_thresholds_colab.ipynb](notebooks/phase4_thresholds_colab.ipynb).
+See [docs/phase4_colab.md](docs/phase4_colab.md) for its strict byte policy,
+dictionary requirements and result audits. It prepares and executes the experiment;
+local code tests are not completed target-model accuracy results.
+
+The integration-review branch combines c-eval with the allocator phases and latest
+shared main. See [docs/integration_review.md](docs/integration_review.md) for tested
+behavior and remaining target-model gates. Score normalization corrects observation
+counts; it does not guarantee position-independent scores or better accuracy.
+
+Run all threshold descriptors with identical model/dictionary/subset settings:
+
+```bash
+python -m tieredkv.eval --config configs/tiered_hh3_b20.json --model LOCAL_MODEL_OR_HF_ID --dictionary MATCHING_DICT.pt --n 50 --results results/review_thresholds.csv
+python -m tieredkv.eval --config configs/tiered_b20.json --model LOCAL_MODEL_OR_HF_ID --dictionary MATCHING_DICT.pt --n 50 --results results/review_thresholds.csv
+python -m tieredkv.eval --config configs/tiered_hh10_b20.json --model LOCAL_MODEL_OR_HF_ID --dictionary MATCHING_DICT.pt --n 50 --results results/review_thresholds.csv
+python plot.py --csv results/review_thresholds.csv --out results/review_plots
+```
+
+Each run gets unique prediction and manifest files. Manifests record effective
+cache settings, model dtype/revision when available, pinned dataset revision,
+prompt hashes, dictionary/source hashes and per-problem budget audits.
+The CSV now includes run_id and eligible: use a new CSV rather than appending to
+the old header. Budget failures remain recorded with eligible=False and CLI exit
+code 1; plots exclude them and save budget_audit.json. Plots reject mixed
+model/task/seed/subset sizes. Fraction units are the default; legacy percent CSVs
+require --units percent. No eligible rows means no new comparison plot.
+
+Memory is actual retained dense+CSR payload divided by full **fp16** KV. A float32
+full cache therefore measures 200%, not 100%; CPU compatibility tests are not
+matched-memory benchmark rows. Dictionary weights, tracker metadata and temporary
+decoded tensors are not included in retained KV; peak GPU memory is separate.
+Each CSR K/V chunk also has final pointer bytes beyond the per-token formula.
+Integer s, dense-window/chunk occupancy, early EOS and expected output length can
+cause target undershoot or overshoot. Audit actual results; do not relabel them.

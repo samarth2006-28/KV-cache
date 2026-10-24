@@ -8,7 +8,7 @@ Owner: Vishal. Contract (see plan section 7):
 
 Per layer the cache stores `sparse` (compressed old tokens, original order) + `recent`
 (dense, last tokens). At the START of update(), before appending the new token: if recent
-holds more than W + C tokens, everything but the last W is compressed (prefill: the whole
+reaches W + C tokens, everything but the last W is compressed before appending (prefill: the whole
 prompt at once; decode: C tokens every C steps). Starting there guarantees the tracker has
 scores for every stored token, since its hook writes them after attention.
 
@@ -27,6 +27,8 @@ Pinned to transformers==4.49.0 (same as Lexico). Batch size 1 for every method b
     out = model.generate(**inputs, past_key_values=cache, max_new_tokens=256, do_sample=False)
 """
 from typing import Any, Dict, List, Optional, Tuple
+import math
+from pathlib import Path
 import warnings
 
 import torch
@@ -51,9 +53,15 @@ _DICTS = {}
 
 def _load_dictionary(path):
     """Whole Lexico dictionary file [2L, d, N], loaded once per process (caches are per problem)."""
-    if path not in _DICTS:
-        _DICTS[path] = torch.load(path, map_location="cpu")
-    return _DICTS[path]
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    key = (str(resolved), stat.st_mtime_ns, stat.st_size)
+    if key not in _DICTS:
+        # A dictionary may be retrained at the same path in an interactive run.
+        for stale in [k for k in _DICTS if k[0] == str(resolved)]:
+            del _DICTS[stale]
+        _DICTS[key] = torch.load(resolved, map_location="cpu", weights_only=True)
+    return _DICTS[key]
 
 
 def _nbytes(x):
@@ -65,17 +73,32 @@ class TieredKVCache(Cache):
                  budget: float = 1.0, tracker=None, dictionary=None,
                  dictionary_path: Optional[str] = None, avg_s: Optional[int] = None,
                  expected_new_tokens: int = 256, tiers=(0.05, 0.20), ratios=(32, 12, 4),
-                 evict_light: bool = False, allocate_fn=None, encode_fn=None, decode_fn=None):
+                 evict_light: bool = False, allocate_fn=None, encode_fn=None, decode_fn=None,
+                 budget_policy: str = "fixed"):
         """window W: dense recent tokens (shared by all methods). chunk C: decode tokens
         compressed at once. budget: target memory fraction of full fp16 KV.
         tracker: allocator.ScoreTracker on the same model (mode="mean" for tiered, "sum" for h2o).
         dictionary: [2L, d, N] tensor (D[2l] keys, D[2l+1] values), or dictionary_path.
         avg_s: atoms per compressed token for lexico (mean for tiered); None -> solved from
         budget at the first compression, with N = prompt + expected_new_tokens.
-        tiers / ratios / evict_light: passed to allocate (tiered only)."""
+        tiers / ratios / evict_light: passed to allocate (tiered only).
+        budget_policy: fixed preserves uniform-byte matching; strict is the HH-only
+        fp16/bf16 adaptive CSR quota, with the dense buffer reserved in advance."""
         super().__init__()
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+        if budget_policy not in ("fixed", "strict"):
+            raise ValueError("budget_policy must be fixed or strict")
+        if budget_policy == "strict" and (method != "tiered" or evict_light or avg_s is not None):
+            raise ValueError("strict policy requires tiered, keep-light and automatic atom allocation")
+        if isinstance(budget, bool) or not math.isfinite(budget) or not 0 < budget <= 1:
+            raise ValueError("budget must be a fraction in (0,1]")
+        for name, value, minimum in (("window", window, 0), ("chunk", chunk, 1),
+                                     ("expected_new_tokens", expected_new_tokens, 0)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        if avg_s is not None and (isinstance(avg_s, bool) or not isinstance(avg_s, int) or avg_s < 1):
+            raise ValueError("avg_s must be a positive integer")
         if method in ("h2o", "tiered") and tracker is None:
             raise ValueError(f"method={method!r} needs a ScoreTracker (tracker=...)")
         if (method in ("lexico", "tiered") and dictionary is None and dictionary_path is None
@@ -86,6 +109,7 @@ class TieredKVCache(Cache):
             if tracker.mode != want:
                 warnings.warn(f"{method} is specified with ScoreTracker(mode={want!r}), got {tracker.mode!r}")
         self.method, self.window, self.chunk, self.budget = method, window, chunk, budget
+        self.budget_policy = budget_policy
         self.tracker, self.dictionary_path = tracker, dictionary_path
         self.dictionary = dictionary
         self.avg_s, self.expected_new_tokens = avg_s, expected_new_tokens
@@ -119,7 +143,8 @@ class TieredKVCache(Cache):
         if self.method == "h2o":
             self._evict(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2])
         elif self.method in ("lexico", "tiered"):
-            self._compress(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2])
+            self._compress(layer_idx, seen_before=self._seen_tokens - key_states.shape[-2],
+                           incoming_tokens=key_states.shape[-2])
         self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
         self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
 
@@ -157,6 +182,10 @@ class TieredKVCache(Cache):
             if D is None:
                 self._layer_dicts[layer_idx] = (None, None)
             else:
+                if (D.ndim != 3 or D.shape[0] < 2*(layer_idx+1) or D.shape[0] % 2 or
+                        D.shape[1] != self.key_cache[layer_idx].shape[-1] or
+                        not 1 <= D.shape[2] <= 32768):
+                    raise ValueError("dictionary must be [2*layers, head_dim, atoms<=32768] for this model")
                 self._layer_dicts[layer_idx] = (D[2 * layer_idx].to(device, torch.float16),
                                                 D[2 * layer_idx + 1].to(device, torch.float16))
         return self._layer_dicts[layer_idx]
@@ -176,34 +205,75 @@ class TieredKVCache(Cache):
             raise RuntimeError(f"layer {layer_idx}: tracker has {n} scores for {n_stored} cached "
                                "tokens; is the tracker hooked on this model and enabled?")
 
-    def _compress(self, layer_idx, seen_before):
-        """lexico / tiered: encode all but the last W recent tokens once recent exceeds W + C."""
+    def _strict_quota(self, recent, sp, seen_before, incoming_tokens):
+        """Reserve the worst dense occupancy before the next compression.
+
+        Fractional avg_s expresses a byte quota; stored atom counts remain integers.
+        Terminal K/V CSR pointers and existing actual CSR bytes are included.
+        This policy is for the HH-only ablation, not uniform-baseline equivalence.
+        """
+        if recent.dtype not in (torch.float16, torch.bfloat16) or incoming_tokens != 1:
+            raise ValueError("strict policy requires fp16/bf16 KV and single-token decode")
+        compress.configure(n_kv_heads=recent.shape[1], head_dim=recent.shape[-1])
+        full = compress.full_bytes_per_token()
+        future_seen = seen_before + incoming_tokens + self.chunk - 1
+        future_dense = self.window + incoming_tokens + self.chunk - 1
+        old_bytes = sum(_nbytes(c) for c in sp["k"]+sp["v"])
+        sparse_ceiling = self.budget*future_seen*full-future_dense*full
+        n_old = recent.shape[-2]-self.window
+        per_token = (sparse_ceiling-old_bytes-2*compress.INDPTR_BYTES)/n_old
+        avg_s = (per_token/(2*recent.shape[1])-compress.INDPTR_BYTES)/(compress.IDX_BYTES+compress.COEF_BYTES)
+        if avg_s < 1:
+            raise ValueError("strict budget infeasible: dense reserve and minimum sparse payload exceed capacity")
+        return avg_s, sparse_ceiling
+
+    def _compress(self, layer_idx, seen_before, incoming_tokens=1):
+        """Encode all but W recent tokens before the incoming token exceeds W+C."""
         recent_k, recent_v = self.key_cache[layer_idx], self.value_cache[layer_idx]
         n_rec = recent_k.shape[-2]
-        if n_rec <= self.window + self.chunk:
+        # Compression runs before the incoming token is appended. Trigger at
+        # the boundary so the post-update recent buffer never grows to W+C+1.
+        if n_rec < self.window + self.chunk:
             return
         if recent_k.shape[0] != 1:
             raise NotImplementedError("compression supports batch size 1")
         n_old = n_rec - self.window
         sp = self.sparse[layer_idx] or {"k": [], "v": [], "s": [], "n": 0}
         first = sp["n"]                      # physical index of the first token in recent
-        avg_s = self._resolve_avg_s(recent_k, seen_before)
+        strict = self.budget_policy == "strict"
+        if strict:
+            if recent_v.dtype != recent_k.dtype:
+                raise ValueError("strict policy requires matching K/V dtypes")
+            avg_s, sparse_ceiling = self._strict_quota(recent_k,sp,seen_before,incoming_tokens)
+            self.avg_s = avg_s
+        else:
+            avg_s = self._resolve_avg_s(recent_k, seen_before)
 
         if self.method == "lexico":
             s = torch.full((n_old,), avg_s, dtype=torch.long, device=recent_k.device)
         else:
             self._check_tracker(layer_idx, first + n_rec)
             scores = self.tracker.scores(layer_idx)[0, first:first + n_old]
+            Dk, _ = self._layer_dictionary(layer_idx, recent_k.device)
+            max_atoms = min(64, Dk.shape[-1]) if Dk is not None else 64
+            if avg_s > max_atoms:
+                raise ValueError("uniform avg_s exceeds the dictionary/allocator atom limit")
             s = self.allocate_fn(scores, avg_s, self.tiers, self.ratios, self.evict_light,
-                                 bytes_fn=compress.bytes_per_token).to(recent_k.device)
+                                 bytes_fn=compress.bytes_per_token, s_max=max_atoms).to(recent_k.device)
 
         live = s > 0                         # s = 0: evicted light token, stored nowhere
         old_k = recent_k[0, :, :n_old].transpose(0, 1)[live]     # [n_live, h, d]
         old_v = recent_v[0, :, :n_old].transpose(0, 1)[live]
         if live.any():
             Dk, Dv = self._layer_dictionary(layer_idx, recent_k.device)
-            sp["k"].append(self.encode_fn(old_k, Dk, s[live]))
-            sp["v"].append(self.encode_fn(old_v, Dv, s[live]))
+            encoded_k = self.encode_fn(old_k, Dk, s[live])
+            encoded_v = self.encode_fn(old_v, Dv, s[live])
+            if strict:
+                total = sum(_nbytes(c) for c in sp["k"]+sp["v"])+_nbytes(encoded_k)+_nbytes(encoded_v)
+                if total > sparse_ceiling+1e-6:
+                    raise RuntimeError("encoded payload exceeds strict byte quota; check storage dtypes")
+            sp["k"].append(encoded_k)
+            sp["v"].append(encoded_v)
             sp["s"].append(s[live])
             sp["n"] += int(live.sum())
         if not live.all():

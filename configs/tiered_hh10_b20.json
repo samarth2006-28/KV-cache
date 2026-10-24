@@ -1,0 +1,25 @@
+{
+  "owner": "Sampreeth",
+  "method": "tiered_hh10",
+  "budget": 0.2,
+  "task": "gsm8k",
+  "seed": 0,
+  "score_mode": "mean",
+  "cfg": {
+    "window": 32,
+    "chunk": 8,
+    "tiers": [
+      0.1,
+      0.2
+    ],
+    "ratios": [
+      32,
+      12,
+      4
+    ],
+    "evict_light": false,
+    "budget_policy": "strict"
+  },
+  "status": "ready_for_integrated_validation",
+  "note": "Phase-4 HH-only strict adaptive byte quota; all thresholds share fp16/bf16, window, chunk, model, dictionary and subset. This policy is separate from fixed uniform-baseline equivalence. Actual accuracy remains pending GPU execution."
+}
