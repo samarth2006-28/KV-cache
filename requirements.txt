@@ -4,4 +4,5 @@ transformers==4.49.0
 accelerate
 datasets
 matplotlib
+numpy
 pytest

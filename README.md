@@ -4,6 +4,25 @@
 
 Lexico gives every token the same number of dictionary atoms `s`. TieredKV uses H₂O's accumulated attention score to decide how many atoms each token gets, while keeping total memory in bytes the same.
 
+## Results at a glance
+
+Llama-3.2-3B-Instruct, GSM8K (40 fixed problems, 5-shot), 20% of full KV memory (measured), one RTX 4060 laptop GPU.
+
+| Method | Memory | Accuracy (flexible) | Strict `#### N` |
+|---|---|---|---|
+| Full KV cache | 100% | 67.5% | 57.5% |
+| **TieredKV (ours)** | 20.5% | **35.0%** | 0.0% |
+| Lexico (uniform atoms) | 20.6% | 32.5% | 20.0% |
+| TieredKV-KV (keys tiered, values uniform) | 19.9% | 20.0% | 2.5% |
+| H₂O (eviction) | 20.0% | 10.0% | 5.0% |
+
+- **Compressing beats deleting.** TieredKV and Lexico both beat H₂O by more than 3× at the same memory (McNemar p = 0.002 and 0.035).
+- **TieredKV vs Lexico is a tie at n = 40** (+2.5 points, p = 1.0). The two methods fail on different problems.
+- **Prompt attention predicts answer-time attention.** The predicted top 5% of tokens receive 86% of the attention while the answer is generated (random: 5%).
+- **TieredKV starves formatting tokens:** it writes `####` in 2/40 answers versus Lexico's 19.
+
+Full write-up: [results/REPORT.md](results/REPORT.md). How to present it: [results/REVIEW_NOTES.md](results/REVIEW_NOTES.md). Raw data, McNemar tables and plots: [results/final/](results/final/).
+
 ## Layout
 
 | File | Owner | What it does |
@@ -79,6 +98,8 @@ Each compressed token-head is stored as int16 atom ids + fp8 coefficients + one 
 
 ## Integrated validation and threshold runs
 
+These are Sampreeth's validation and ablation tools. Their GPU runs were not part of the final results above; [docs/README.md](docs/README.md) says which docs are current and which are history.
+
 For Sampreeth's four H2O budgets plus full baseline, open
 [notebooks/h2o_matrix_colab.ipynb](notebooks/h2o_matrix_colab.ipynb).
 It needs a GPU and pinned model, **no dictionary**. It also saves a twenty-prompt
@@ -120,7 +141,7 @@ Memory is actual retained dense+CSR payload divided by full **fp16** KV. A float
 full cache therefore measures 200%, not 100%; CPU compatibility tests are not
 matched-memory benchmark rows. Dictionary weights, tracker metadata and the
 decoded copies are not included in retained KV: for speed the cache keeps each compressed chunk
-decoded (`cache_decoded=True`), reported per problem as `decoded_bytes`. Peak GPU memory is separate.
+decoded (`cache_decoded=True`, the default), reported per problem as `decoded_bytes`. Peak GPU memory is separate.
 Each CSR K/V chunk also has final pointer bytes beyond the per-token formula.
 Dense-window/chunk occupancy, early EOS and the planned output length
 (`--expected-new-tokens`) can cause undershoot or overshoot. Audit actual results; do not relabel them.

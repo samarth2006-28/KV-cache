@@ -1,1 +1,1 @@
-gradio>=4
+gradio>=4,<6  # gradio 6 needs huggingface-hub>=1, which breaks transformers 4.49
