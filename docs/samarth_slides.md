@@ -10,7 +10,15 @@ Draft content for the deck. Numbers marked **[TBD]** are filled from `results/sa
 - We learn a **dictionary** of 4,096 "atom" vectors per layer, once, offline.
 - Each stored vector becomes a sum of a few atoms: `k ≈ c₁·atom₁₇ + c₂·atom₉₀₂ + … (s atoms)`.
 - We store only **s pairs (atom id, coefficient)** instead of 128 numbers. Atoms are chosen by Orthogonal Matching Pursuit (greedy: pick the best atom, refit, repeat).
-- **More atoms = more accurate and more bytes.** Our measured error for s = 2 / 4 / 8 / 16 / 32 is **[TBD]**, shown in the `error_by_s.png` plot.
+- **More atoms = more accurate and more bytes.** Measured relative error on Llama-3.2-3B (5 GSM8K prompts, about 640 tokens each), plotted in `results/sanity/error_by_s.png`:
+
+| s | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|
+| Keys | 0.57 | 0.49 | 0.40 | 0.27 | 0.13 |
+| Values | 0.81 | 0.73 | 0.59 | 0.39 | 0.16 |
+
+- Values are harder to compress than keys at every s.
+- Our dictionary trained for 45 min on a laptop GPU. Lexico trains for much longer, so our absolute errors are higher than theirs. That applies equally to every method we compare.
 
 Visual: one vector → a stacked bar of 8 coloured atoms.
 
@@ -58,12 +66,20 @@ Uniform s that fits each budget (N = 1,000 tokens, W = 32):
 
 From `python -m tieredkv.check_dict`: Llama-3.2-3B, 5 GSM8K prompts, s = 8.
 
-- **Attention-weighted reconstruction error.** This measures how much of the attention lands on badly reconstructed tokens.
-  - Uniform s = 8: **[TBD]**
-  - Tiered (same bytes): **[TBD]**
-  - If tiered is lower, the model "sees" less error, even before measuring accuracy.
-- **Are important tokens harder to compress?** Spearman correlation between attention and error: **[TBD]**.
-  - If it's around 0, the reason to tier is that their errors matter more, not that they're harder to compress. Be honest about which it is.
+- **Attention-weighted reconstruction error.** This measures how much of the attention lands on badly reconstructed tokens. Same bytes, average s = 8:
+
+| | Uniform (Lexico) | Tiered (ours) | Change |
+|---|---|---|---|
+| Keys | 0.38 | 0.20 | **−49%** |
+| Values | 0.53 | 0.27 | **−48%** |
+
+  The model "sees" about half the reconstruction error for the same memory, even before any accuracy run.
+  Caveat: this uses the same prompt attention for both choosing and weighting. Generation accuracy is the real test.
+- **Are important tokens harder to compress?**
+  - **Keys: yes.** Spearman ρ between attention and error has a median of +0.53, and it's positive in 100% of the 140 (prompt × layer) pairs. Top-5% keys have error 0.50 vs 0.38 for the bottom 75% at the same s.
+  - **Values: no.** ρ ≈ 0.03, and the error is the same for heavy and light tokens (0.59 vs 0.59).
+  - So, honestly: for keys, important tokens are both harder to compress *and* matter more. For values, they only matter more.
+- **Speed (per prompt, all 28 layers, K+V):** encoding the prompt takes 1.5 s, done once. Decoding all compressed tokens takes 0.10 s. If the decode happens on every generated token, that adds about 25 s per problem, so the cache should decode each chunk once.
 
 ---
 
