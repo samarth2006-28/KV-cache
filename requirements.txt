@@ -1,0 +1,7 @@
+torch>=2.1
+# Lexico pins 4.49.0; tieredkv is tested on 4.47.1 and 4.49.0
+transformers==4.49.0
+accelerate
+datasets
+matplotlib
+pytest
